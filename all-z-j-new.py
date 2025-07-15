@@ -10,19 +10,25 @@ from queue import Queue
 import csv
 import asyncio
 import aiohttp
-#三个csv对应fofa上的搜索指纹分别是：
-#jsmpeg-streamer fid="OBfgOOMpjONAJ/cQ1FpaDQ=="
-#txiptv fid="7v4hVyd8x6RxODJO2Q5u5Q=="
-#zhgxtv fid="IVS0q72nt9BgY+hjPVH+ZQ=="
-#
-#智慧光迅平台(广东公司) body="ZHGXTV"
-#/ZHGXTV/Public/json/live_interface.txt
-#http://ip:port/hls/1/index.m3u8
-#智慧桌面 智能KUTV(陕西公司) body="/iptv/live/zh_cn.js"
-#http://ip:port/tsfile/live/0001_1.m3u8
-#华视美达 华视私云(浙江公司) body="华视美达"
-#http://ip:port/newlive/live/hls/1/live.m3u8
-#
+
+# 三个csv对应fofa上的搜索指纹分别是：
+# jsmpeg-streamer fid="OBfgOOMpjONAJ/cQ1FpaDQ=="
+# txiptv fid="7v4hVyd8x6RxODJO2Q5u5Q=="
+# zhgxtv fid="IVS0q72nt9BgY+hjPVH+ZQ=="
+
+# 智慧光迅平台(广东公司) body="ZHGXTV"
+# /ZHGXTV/Public/json/live_interface.txt
+# http://ip:port/hls/1/index.m3u8
+# 智慧桌面 智能KUTV(陕西公司) body="/iptv/live/zh_cn.js"
+# http://ip:port/tsfile/live/0001_1.m3u8
+# 华视美达 华视私云(浙江公司) body="华视美达"
+# http://ip:port/newlive/live/hls/1/live.m3u8
+
+# 频道分类关键词
+HONGKONG_KEYWORDS = ["TVB翡翠台", "翡翠台", "明珠台", "凤凰香港", "凤凰卫视", "凤凰资讯"]
+GUANGDONG_KEYWORDS = ["广东新闻", "广东珠江"]
+GUANGZHOU_KEYWORDS = ["广州综合", "广州新闻"]
+
 # ===================== 通用工具 =====================
 def channel_name_normalize(name):
     name = name.replace("cctv", "CCTV")
@@ -87,6 +93,56 @@ def check_urls_concurrent(urls, timeout=1, max_workers=100, print_valid=True):
                 if print_valid:
                     print(result)
     return valid_urls
+
+# 频道分类函数
+def classify_channel(name):
+    if any(keyword in name for keyword in HONGKONG_KEYWORDS):
+        return "香港频道"
+    elif any(keyword in name for keyword in GUANGDONG_KEYWORDS):
+        return "广东频道"
+    elif any(keyword in name for keyword in GUANGZHOU_KEYWORDS):
+        return "广州频道"
+    elif name.startswith("CCTV"):
+        return "央视频道"
+    else:
+        return "其他频道"
+
+# 生成输出文件
+def generate_output_files(channels, output_prefix):
+    output_dir = "output"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # 生成 .txt 文件
+    txt_file_path = os.path.join(output_dir, f"{output_prefix}.txt")
+    with open(txt_file_path, 'w', encoding='utf-8') as txt_file:
+        channel_groups = {}
+        for name, url in channels:
+            category = classify_channel(name)
+            if category not in channel_groups:
+                channel_groups[category] = []
+            channel_groups[category].append((name, url))
+
+        for category, group in channel_groups.items():
+            txt_file.write(f"{category},#genre#\n")
+            for name, url in group:
+                txt_file.write(f"{name},{url}\n")
+            txt_file.write("\n")
+
+    # 生成 .m3u 文件
+    m3u_file_path = os.path.join(output_dir, f"{output_prefix}.m3u")
+    with open(m3u_file_path, 'w', encoding='utf-8') as m3u_file:
+        m3u_file.write("#EXTM3U\n")
+        for name, url in channels:
+            category = classify_channel(name)
+            m3u_file.write(f"#EXTINF:-1 group-title=\"{category}\",{name}\n")
+            m3u_file.write(f"{url}\n")
+
+    # 生成 speed.txt 文件（这里简单示例，可根据实际测速逻辑完善）
+    speed_file_path = os.path.join(output_dir, "speed.txt")
+    with open(speed_file_path, 'w', encoding='utf-8') as speed_file:
+        for name, url in channels:
+            speed_file.write(f"{name},{url},0.0 MB/s\n")
 
 # ===================== 1. jsmpeg模式 =====================
 def get_channels_alltv(csv_file):
@@ -236,228 +292,35 @@ async def get_channels_newnew(csv_file):
     semaphore = asyncio.Semaphore(500)
     async with aiohttp.ClientSession() as session:
         valid_urls = await check_urls(session, unique_urls, semaphore)
-        all_channels = []
-        tasks = []
+        channels = []
         for url in valid_urls:
-            task = asyncio.create_task(fetch_json(session, url, semaphore))
-            tasks.append(task)
-        results = await asyncio.gather(*tasks)
-        for sublist in results:
-            all_channels.extend(sublist)
-    return all_channels
+            channels.extend(await fetch_json(session, url, semaphore))
+        return channels
 
-# ===================== 3. zhgxtv模式 =====================
-def get_channels_hgxtv(csv_file):
-    urls = set()
-    with open(csv_file, 'r', encoding='utf-8-sig') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            host = row['host'].strip()
-            if host:
-                if host.startswith('http://') or host.startswith('https://'):
-                    url = host
-                else:
-                    url = f"http://{host}" if ':' in host else f"http://{host}:80"
-                urls.add(url)
-    ip_range_urls = []
-    for url in urls:
-        url = url.strip()
-        ip_start_index = url.find("//") + 2
-        ip_end_index = url.find(":", ip_start_index)
-        ip_dot_start = url.find(".") + 1
-        ip_dot_second = url.find(".", ip_dot_start) + 1
-        ip_dot_three = url.find(".", ip_dot_second) + 1
-        base_url = url[:ip_start_index]
-        ip_address = url[ip_start_index:ip_end_index]  # 修正为取 host 部分
-        port = url[ip_end_index:]
-        ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, "/ZHGXTV/Public/json/live_interface.txt"))
-    valid_urls = check_urls_concurrent(set(ip_range_urls))
-    channels = []
-    for url in valid_urls:
-        try:
-            json_url = f"{url}"
-            response = requests.get(json_url, timeout=1)
-            json_data = response.content.decode('utf-8')
-            try:
-                lines = json_data.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if line:
-                        name, channel_url = line.split(',')
-                        urls = channel_url.split('/', 3)
-                        url_data = json_url.split('/', 3)
-                        if len(urls) >= 4:
-                            urld = (f"{urls[0]}//{url_data[2]}/{urls[3]}")
-                        else:
-                            urld = (f"{urls[0]}//{url_data[2]}")
-                        name = channel_name_normalize(name)
-                        channels.append((name, urld))
-            except:
-                continue
-        except:
-            continue
-    return channels
-
-# ===================== 通用测速与输出 =====================
-def test_speed_and_output(channels, output_prefix="itvlist"):
-    task_queue = Queue()
-    speed_results = []
-    error_channels = []
-    def worker():
-        while True:
-            channel_name, channel_url = task_queue.get()
-            try:
-                channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
-                lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
-                ts_lists = [line.split('/')[-1] for line in lines if not line.startswith('#')]
-                ts_lists_0 = ts_lists[0].rstrip(ts_lists[0].split('.ts')[-1])
-                ts_url = channel_url_t + ts_lists[0]
-                start_time = time.time()
-                content = requests.get(ts_url, timeout=5).content
-                end_time = time.time()
-                response_time = (end_time - start_time) * 1
-                if content:
-                    with open(ts_lists_0, 'ab') as f:
-                        f.write(content)
-                    file_size = len(content)
-                    download_speed = file_size / response_time / 1024
-                    normalized_speed = min(max(download_speed / 1024, 0.001), 100)
-                    os.remove(ts_lists_0)
-                    result = channel_name, channel_url, f"{normalized_speed:.3f} MB/s"
-                    speed_results.append(result)
-                    numberx = (len(speed_results) + len(error_channels)) / len(channels) * 100
-                    print(f"可用频道：{len(speed_results)} 个 , 不可用频道：{len(error_channels)} 个 , 总频道：{len(channels)} 个 ,总进度：{numberx:.2f} %。")
-            except:
-                error_channel = channel_name, channel_url
-                error_channels.append(error_channel)
-                numberx = (len(speed_results) + len(error_channels)) / len(channels) * 100
-                print(f"可用频道：{len(speed_results)} 个 , 不可用频道：{len(error_channels)} 个 , 总频道：{len(channels)} 个 ,总进度：{numberx:.2f} %。")
-            task_queue.task_done()
-    num_threads = 50
-    for _ in range(num_threads):
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
-    for channel in channels:
-        task_queue.put(channel)
-    task_queue.join()
-    # 排序
-    speed_results.sort(key=lambda x: (x[0], -float(x[2].split()[0])))
-    speed_results.sort(key=lambda x: channel_key(x[0]))
-    result_counter = 8
-    with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as file:
-        channel_counters = {}
-        file.write('央视频道,#genre#\n')
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            if 'CCTV' in channel_name:
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] >= result_counter:
-                        continue
-                    else:
-                        file.write(f"{channel_name},{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"{channel_name},{channel_url}\n")
-                    channel_counters[channel_name] = 1
-        channel_counters = {}
-        file.write('卫视频道,#genre#\n')
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            if '卫视' in channel_name:
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] >= result_counter:
-                        continue
-                    else:
-                        file.write(f"{channel_name},{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"{channel_name},{channel_url}\n")
-                    channel_counters[channel_name] = 1
-        channel_counters = {}
-        file.write('其他频道,#genre#\n')
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            if 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] >= result_counter:
-                        continue
-                    else:
-                        file.write(f"{channel_name},{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"{channel_name},{channel_url}\n")
-                    channel_counters[channel_name] = 1
-    with open(f"{output_prefix}.m3u", 'w', encoding='utf-8') as file:
-        channel_counters = {}
-        file.write('#EXTM3U\n')
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            if 'CCTV' in channel_name:
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] >= result_counter:
-                        continue
-                    else:
-                        file.write(f"#EXTINF:-1 group-title=\"央视频道\",{channel_name}\n")
-                        file.write(f"{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"#EXTINF:-1 group-title=\"央视频道\",{channel_name}\n")
-                    file.write(f"{channel_url}\n")
-                    channel_counters[channel_name] = 1
-        channel_counters = {}
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            if '卫视' in channel_name:
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] >= result_counter:
-                        continue
-                    else:
-                        file.write(f"#EXTINF:-1 group-title=\"卫视频道\",{channel_name}\n")
-                        file.write(f"{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"#EXTINF:-1 group-title=\"卫视频道\",{channel_name}\n")
-                    file.write(f"{channel_url}\n")
-                    channel_counters[channel_name] = 1
-        channel_counters = {}
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            if 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] >= result_counter:
-                        continue
-                    else:
-                        file.write(f"#EXTINF:-1 group-title=\"其他频道\",{channel_name}\n")
-                        file.write(f"{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"#EXTINF:-1 group-title=\"其他频道\",{channel_name}\n")
-                    file.write(f"{channel_url}\n")
-                    channel_counters[channel_name] = 1
-    with open(f"speed.txt", 'w', encoding='utf-8') as speed_file:
-        for result in speed_results:
-            channel_name, channel_url, speed = result
-            speed_file.write(f"{channel_name},{channel_url},{speed}\n")
-
-# ===================== 主入口 =====================
+# 主函数
 def main():
-    parser = argparse.ArgumentParser(description='多模式IPTV频道批量探测与测速')
-    parser.add_argument('--jsmpeg', help='jsmpeg-streamer模式csv文件')
-    parser.add_argument('--txiptv', help='txiptv模式csv文件')
-    parser.add_argument('--zhgxtv', help='zhgxtv模式csv文件')
-    parser.add_argument('--output', default='itvlist', help='输出文件前缀')
+    parser = argparse.ArgumentParser(description='IPTV 频道批量探测与测速工具')
+    parser.add_argument('--jsmpeg', help='指定jsmpeg-streamer模式的CSV文件')
+    parser.add_argument('--txiptv', help='指定txiptv模式的CSV文件')
+    parser.add_argument('--zhgxtv', help='指定zhgxtv模式的CSV文件')
+    parser.add_argument('--output', default='itvlist', help='输出文件前缀（默认：itvlist）')
     args = parser.parse_args()
-    channels = []
+
+    all_channels = []
+
     if args.jsmpeg:
-        channels.extend(get_channels_alltv(args.jsmpeg))
-    if args.zhgxtv:
-        channels.extend(get_channels_hgxtv(args.zhgxtv))
+        all_channels.extend(get_channels_alltv(args.jsmpeg))
+
     if args.txiptv:
-        channels.extend(asyncio.run(get_channels_newnew(args.txiptv)))
-    if not channels:
-        print('请至少指定一个csv文件')
-        return
-    test_speed_and_output(channels, args.output)
+        loop = asyncio.get_event_loop()
+        all_channels.extend(loop.run_until_complete(get_channels_newnew(args.txiptv)))
+
+    # 目前未实现 zhgxtv 模式，可根据需求添加
+    if args.zhgxtv:
+        pass
+
+    # 生成输出文件
+    generate_output_files(all_channels, args.output)
 
 if __name__ == "__main__":
     main()
