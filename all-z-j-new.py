@@ -1,95 +1,59 @@
-import argparse
-import time
-import datetime
-import concurrent.futures
-import requests
 import re
+import csv
+import requests
+import concurrent.futures
+import asyncio
+import aiohttp
 import os
 import threading
 from queue import Queue
-import csv
-import asyncio
-import aiohttp
+import argparse
 
-# 三个csv文件（与代码文件存放在相同目录中）
-JSMPEG_CSV = "jsmpeg.csv"
-TXIPTV_CSV = "txiptv_new.csv"
-ZHGXTX_CSV = "zhgxtv_new.csv"
-
-# 频道分类关键词
-CHANNEL_CATEGORIES = {
-    "香港频道": ["TVB翡翠台", "翡翠台", "明珠台", "凤凰香港", "凤凰卫视", "凤凰资讯"],
-    "广东频道": ["广东新闻", "广东珠江", "广州综合", "广州新闻"],
-    "央视频道": ["CCTV"],
-    "其他频道": []  # 作为默认分类
-}
-
-# ===================== 通用工具 =====================
+# 归一化频道名称
 def channel_name_normalize(name):
-    """标准化频道名称，移除冗余词汇并统一格式"""
-    name = name.replace("cctv", "CCTV")
-    name = name.replace("中央", "CCTV")
-    name = name.replace("央视", "CCTV")
     for rep in ["高清", "超高", "HD", "标清", "频道", "-", " ", "PLUS", "＋", "(", ")"]:
         name = name.replace(rep, "" if rep not in ["PLUS", "＋"] else "+")
     name = re.sub(r"CCTV(\d+)台", r"CCTV\1", name)
     name_map = {
-        "CCTV1综合": "CCTV1", "CCTV2财经": "CCTV2", "CCTV3综艺": "CCTV3", "CCTV4国际": "CCTV4",
-        "CCTV4中文国际": "CCTV4", "CCTV4欧洲": "CCTV4", "CCTV5体育": "CCTV5", "CCTV6电影": "CCTV6",
-        "CCTV7军事": "CCTV7", "CCTV7军农": "CCTV7", "CCTV7农业": "CCTV7", "CCTV7国防军事": "CCTV7",
-        "CCTV8电视剧": "CCTV8", "CCTV9记录": "CCTV9", "CCTV9纪录": "CCTV9", "CCTV10科教": "CCTV10",
-        "CCTV11戏曲": "CCTV11", "CCTV12社会与法": "CCTV12", "CCTV13新闻": "CCTV13", "CCTV新闻": "CCTV13",
-        "CCTV14少儿": "CCTV14", "CCTV15音乐": "CCTV15", "CCTV16奥林匹克": "CCTV16",
-        "CCTV17农业农村": "CCTV17", "CCTV17农业": "CCTV17", "CCTV5+体育赛视": "CCTV5+",
-        "CCTV5+体育赛事": "CCTV5+", "CCTV5+体育": "CCTV5+"
+        "CCTV1综合": "CCTV1", "CCTV2财经": "CCTV2", "CCTV3综艺": "CCTV3",
+        "CCTV4国际": "CCTV4", "CCTV4中文国际": "CCTV4", "CCTV4欧洲": "CCTV4",
+        "CCTV5体育": "CCTV5", "CCTV6电影": "CCTV6", "CCTV7军事": "CCTV7",
+        "CCTV7军农": "CCTV7", "CCTV7农业": "CCTV7", "CCTV7国防军事": "CCTV7",
+        "CCTV8电视剧": "CCTV8", "CCTV9记录": "CCTV9", "CCTV9纪录": "CCTV9",
+        "CCTV10科教": "CCTV10", "CCTV11戏曲": "CCTV11", "CCTV12社会与法": "CCTV12",
+        "CCTV13新闻": "CCTV13", "CCTV新闻": "CCTV13", "CCTV14少儿": "CCTV14",
+        "CCTV15音乐": "CCTV15", "CCTV16奥林匹克": "CCTV16",
+        "CCTV17农业农村": "CCTV17", "CCTV17农业": "CCTV17",
+        "CCTV5+体育赛视": "CCTV5+", "CCTV5+体育赛事": "CCTV5+", "CCTV5+体育": "CCTV5+"
     }
-    return name_map.get(name, name)
+    name = name_map.get(name, name)
+    return name
 
-def classify_channel(name):
-    """根据频道名称将其归类到预定义的分类中"""
-    for category, keywords in CHANNEL_CATEGORIES.items():
-        if category == "其他频道":
-            continue  # 最后处理默认分类
-        if any(keyword in name for keyword in keywords):
-            return category
-        if category == "央视频道" and name.startswith("CCTV"):
-            return category
-    return "其他频道"  # 默认分类
-
+# 获取频道名称中的数字
 def channel_key(channel_name):
-    """用于排序的键函数，提取频道名中的数字部分"""
     match = re.search(r'\d+', channel_name)
     if match:
         return int(match.group())
-    else:
-        return float('inf')
+    return float('inf')
 
+# 生成同一C段的所有IP的URL
 def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
-    """生成同一C段的所有IP的URL，确保IP合法"""
     ip_parts = ip_address.split('.')
     if len(ip_parts) < 3:
         return []
     c_prefix = '.'.join(ip_parts[:3])
-    urls = []
-    for i in range(1, 256):
-        full_ip = f"{c_prefix}.{i}"
-        url = f"{base_url}{full_ip}{port}"
-        if suffix:
-            url += suffix
-        urls.append(url)
-    return urls
+    return [f"{base_url}{c_prefix}.{i}{port}{suffix if suffix else ''}" for i in range(1, 256)]
 
+# 并发检测URL可用性
 def check_urls_concurrent(urls, timeout=1, max_workers=100, print_valid=True):
-    """并发检测URL可用性，返回可用URL列表"""
-    valid_urls = []
     def is_url_accessible(url):
         try:
             response = requests.get(url, timeout=timeout)
-            if response.status_code == 200:
-                return url
+            return url if response.status_code == 200 else None
         except requests.RequestException:
-            pass
-        return None
+            return None
+
+    valid_urls = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(is_url_accessible, url) for url in urls]
         for future in concurrent.futures.as_completed(futures):
@@ -97,320 +61,276 @@ def check_urls_concurrent(urls, timeout=1, max_workers=100, print_valid=True):
             if result:
                 valid_urls.append(result)
                 if print_valid:
-                    print(f"有效URL: {result}")
+                    print(result)
     return valid_urls
 
-# ===================== 1. jsmpeg模式 =====================
-def get_channels_alltv():
-    """从jsmpeg.csv文件获取频道信息"""
+# jsmpeg模式获取频道
+def get_channels_alltv(csv_file):
     urls = set()
-    try:
-        with open(JSMPEG_CSV, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
-            if not fieldnames or 'host' not in fieldnames:
-                print(f"错误: {JSMPEG_CSV}缺少host列")
-                return []
-            for row in reader:
-                host = row['host'].strip()
-                if host:
-                    if host.startswith('http://') or host.startswith('https://'):
-                        urls.add(host)
-                    else:
-                        urls.add(f"http://{host}")
-    except FileNotFoundError:
-        print(f"警告: {JSMPEG_CSV}文件不存在，跳过jsmpeg模式")
-        return []
-    
+    with open(csv_file, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        if 'host' not in reader.fieldnames:
+            raise ValueError('CSV文件缺少host列')
+        for row in reader:
+            host = row['host'].strip()
+            if host:
+                urls.add(host if host.startswith(('http://', 'https://')) else f"http://{host}")
+
     ip_range_urls = []
     for url in urls:
-        url = url.strip()
-        ip_start_index = url.find("//") + 2
-        ip_end_index = url.find(":", ip_start_index)
-        base_url = url[:ip_start_index]
-        ip_address = url[ip_start_index:ip_end_index]
-        port = url[ip_end_index:]
+        ip_start = url.find("//") + 2
+        ip_end = url.find(":", ip_start)
+        base_url = url[:ip_start]
+        ip_address = url[ip_start:ip_end]
+        port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port))
-    
+
     valid_urls = check_urls_concurrent(set(ip_range_urls))
     channels = []
     for url in valid_urls:
-        json_url = url.rstrip('/') + '/streamer/list'
+        json_url = f"{url.rstrip('/')}/streamer/list"
         try:
-            response = requests.get(json_url, timeout=1)
-            json_data = response.json()
+            json_data = requests.get(json_url, timeout=1).json()
             host = url.rstrip('/')
             for item in json_data:
                 name = item.get('name', '').strip()
                 key = item.get('key', '').strip()
-                if not name or not key:
-                    continue
-                channel_url = f"{host}/hls/{key}/index.m3u8"
-                name = channel_name_normalize(name)
-                channels.append((name, channel_url))
-        except Exception as e:
-            print(f"获取{url}频道信息失败: {e}")
+                if name and key:
+                    channel_url = f"{host}/hls/{key}/index.m3u8"
+                    channels.append((channel_name_normalize(name), channel_url))
+        except Exception:
             continue
     return channels
 
-# ===================== 2. txiptv模式（异步） =====================
-async def get_channels_newnew():
-    """从txiptv_new.csv文件获取频道信息"""
-    urls = []
-    try:
-        with open(TXIPTV_CSV, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            url_set = set()
-            for row in reader:
-                link = row.get('link', '').strip()
-                if link:
-                    url_set.add(link)
-            urls = list(url_set)
-    except FileNotFoundError:
-        print(f"警告: {TXIPTV_CSV}文件不存在，跳过txiptv模式")
-        return []
-    
+# txiptv模式获取频道（异步）
+async def get_channels_newnew(csv_file):
+    with open(csv_file, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        urls = list(set(row.get('link', '').strip() for row in reader if row.get('link')))
+
     async def modify_urls(url):
-        modified_urls = []
-        ip_start_index = url.find("//") + 2
-        ip_end_index = url.find(":", ip_start_index)
-        base_url = url[:ip_start_index]
-        ip_address = url[ip_start_index:ip_end_index]
+        ip_start = url.find("//") + 2
+        ip_end = url.find(":", ip_start)
+        base_url = url[:ip_start]
+        ip_address = url[ip_start:ip_end]
         ip_parts = ip_address.split('.')
         if len(ip_parts) < 3:
             return []
         c_prefix = '.'.join(ip_parts[:3])
-        port = url[ip_end_index:]
+        port = url[ip_end:]
         ip_end = "/iptv/live/1000.json?key=txiptv"
-        for i in range(1, 256):
-            full_ip = f"{c_prefix}.{i}"
-            modified_url = f"{base_url}{full_ip}{port}{ip_end}"
-            modified_urls.append(modified_url)
-        return modified_urls
-    
+        return [f"{base_url}{c_prefix}.{i}{port}{ip_end}" for i in range(1, 256)]
+
     async def is_url_accessible(session, url, semaphore):
         async with semaphore:
             try:
                 async with session.get(url, timeout=1) as response:
-                    if response.status == 200:
-                        return url
+                    return url if response.status == 200 else None
             except (aiohttp.ClientError, asyncio.TimeoutError):
-                pass
-        return None
-    
+                return None
+
     async def check_urls(session, urls, semaphore):
         tasks = []
         for url in urls:
-            url = url.strip()
             modified_urls = await modify_urls(url)
-            for modified_url in modified_urls:
-                task = asyncio.create_task(is_url_accessible(session, modified_url, semaphore))
-                tasks.append(task)
+            tasks.extend(asyncio.create_task(is_url_accessible(session, modified_url, semaphore)) for modified_url in modified_urls)
         results = await asyncio.gather(*tasks)
         valid_urls = [result for result in results if result]
         for url in valid_urls:
-            print(f"有效URL: {url}")
+            print(url)
         return valid_urls
-    
+
     async def fetch_json(session, url, semaphore):
         async with semaphore:
             try:
-                ip_start_index = url.find("//") + 2
-                ip_dot_start = url.find(".") + 1
-                ip_index_second = url.find("/", ip_dot_start)
-                base_url = url[:ip_start_index]
-                ip_address = url[ip_start_index:ip_index_second]
+                ip_start = url.find("//") + 2
+                ip_index = url.find("/", url.find(".") + 1)
+                base_url = url[:ip_start]
+                ip_address = url[ip_start:ip_index]
                 url_x = f"{base_url}{ip_address}"
-                json_url = f"{url}"
-                async with session.get(json_url, timeout=1) as response:
-                    json_data = await response.json()
-                    channels = []
-                    try:
-                        for item in json_data['data']:
-                            if isinstance(item, dict):
-                                name = item.get('name')
-                                urlx = item.get('url')
-                                if ',' in urlx:
-                                    urlx = "aaaaaaaa"
-                                if 'http' in urlx:
-                                    urld = f"{urlx}"
-                                else:
-                                    urld = f"{url_x}{urlx}"
-                                if name and urlx:
-                                    name = channel_name_normalize(name)
-                                    channels.append((name, urld))
-                    except Exception as e:
-                        print(f"解析JSON数据失败: {e}")
-                        pass
-                    return channels
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
-                print(f"获取{url}数据失败: {e}")
+                json_data = await session.get(url, timeout=1).json()
+                channels = []
+                for item in json_data.get('data', []):
+                    if isinstance(item, dict):
+                        name = item.get('name')
+                        urlx = item.get('url')
+                        if ',' in urlx:
+                            urlx = "aaaaaaaa"
+                        urld = urlx if 'http' in urlx else f"{url_x}{urlx}"
+                        if name and urlx:
+                            channels.append((channel_name_normalize(name), urld))
+                return channels
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
                 return []
-    
+
     x_urls = []
     for url in urls:
-        url = url.strip()
-        ip_start_index = url.find("//") + 2
-        ip_end_index = url.find(":", ip_start_index)
-        ip_dot_start = url.find(".") + 1
-        ip_dot_second = url.find(".", ip_dot_start) + 1
-        ip_dot_three = url.find(".", ip_dot_second) + 1
-        base_url = url[:ip_start_index]
-        ip_address = url[ip_start_index:ip_dot_three]
-        port = url[ip_end_index:]
-        ip_end = "1"
-        modified_ip = f"{ip_address}{ip_end}"
-        x_url = f"{base_url}{modified_ip}{port}"
-        x_urls.append(x_url)
-    
+        ip_start = url.find("//") + 2
+        ip_end = url.find(":", ip_start)
+        ip_dot = url.find(".") + 1
+        ip_address = url[ip_start:url.find(".", ip_dot, url.find(".", ip_dot + 1)) + 1]
+        port = url[ip_end:]
+        x_urls.append(f"{url[:ip_start]}{ip_address}1{port}")
+
     unique_urls = set(x_urls)
     semaphore = asyncio.Semaphore(500)
     async with aiohttp.ClientSession() as session:
         valid_urls = await check_urls(session, unique_urls, semaphore)
-        all_channels = []
-        for url in valid_urls:
-            channels = await fetch_json(session, url, semaphore)
-            all_channels.extend(channels)
-        return all_channels
+        tasks = [asyncio.create_task(fetch_json(session, url, semaphore)) for url in valid_urls]
+        results = await asyncio.gather(*tasks)
+        return [channel for sublist in results for channel in sublist]
 
-# ===================== 3. zhgxtv模式 =====================
-def get_channels_zhgxtv():
-    """从zhgxtv_new.csv文件获取频道信息"""
+# zhgxtv模式获取频道
+def get_channels_hgxtv(csv_file):
     urls = set()
-    try:
-        with open(ZHGXTX_CSV, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
-            if not fieldnames or 'host' not in fieldnames:
-                print(f"错误: {ZHGXTX_CSV}缺少host列")
-                return []
-            for row in reader:
-                host = row['host'].strip()
-                if host:
-                    if host.startswith('http://') or host.startswith('https://'):
-                        urls.add(host)
-                    else:
-                        urls.add(f"http://{host}")
-    except FileNotFoundError:
-        print(f"警告: {ZHGXTX_CSV}文件不存在，跳过zhgxtv模式")
-        return []
-    
+    with open(csv_file, 'r', encoding='utf-8-sig') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            host = row['host'].strip()
+            if host:
+                url = host if host.startswith(('http://', 'https://')) else f"http://{host}{':80' if ':' not in host else ''}"
+                urls.add(url)
+
     ip_range_urls = []
     for url in urls:
-        url = url.strip()
-        ip_start_index = url.find("//") + 2
-        ip_end_index = url.find(":", ip_start_index)
-        base_url = url[:ip_start_index]
-        ip_address = url[ip_start_index:ip_end_index]
-        port = url[ip_end_index:]
-        ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, suffix="/ZHGXTV/Public/json/live_interface.txt"))
-    
+        ip_start = url.find("//") + 2
+        ip_end = url.find(":", ip_start)
+        base_url = url[:ip_start]
+        ip_address = url[ip_start:ip_end]
+        port = url[ip_end:]
+        ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, "/ZHGXTV/Public/json/live_interface.txt"))
+
     valid_urls = check_urls_concurrent(set(ip_range_urls))
     channels = []
     for url in valid_urls:
         try:
-            response = requests.get(url, timeout=1)
-            text_data = response.text
-            lines = text_data.splitlines()
-            for line in lines:
-                parts = line.split(',')
-                if len(parts) == 2:
-                    name = parts[0].strip()
-                    channel_url = parts[1].strip()
-                    name = channel_name_normalize(name)
-                    channels.append((name, channel_url))
-        except Exception as e:
-            print(f"获取{url}频道信息失败: {e}")
+            json_data = requests.get(url, timeout=1).content.decode('utf-8')
+            for line in json_data.split('\n'):
+                line = line.strip()
+                if line:
+                    name, channel_url = line.split(',')
+                    urls_parts = channel_url.split('/', 3)
+                    url_data_parts = url.split('/', 3)
+                    urld = f"{urls_parts[0]}//{url_data_parts[2]}/{urls_parts[3]}" if len(urls_parts) >= 4 else f"{urls_parts[0]}//{url_data_parts[2]}"
+                    channels.append((channel_name_normalize(name), urld))
+        except:
             continue
     return channels
 
-# ===================== 输出处理 =====================
-def generate_output_files(channels, output_prefix="itvlist"):
-    """生成多种格式的输出文件，并按分类组织频道"""
-    # 创建输出目录（如果不存在）
-    output_dir = "output"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 按分类组织频道
-    categorized_channels = {}
-    for name, url in channels:
-        category = classify_channel(name)
-        if category not in categorized_channels:
-            categorized_channels[category] = []
-        categorized_channels[category].append((name, url))
-    
-    # 生成M3U文件（按分类排序）
-    m3u_file = os.path.join(output_dir, f"{output_prefix}.m3u")
-    with open(m3u_file, 'w', encoding='utf-8') as f:
-        f.write("#EXTM3U\n")
-        # 按分类排序
-        for category in sorted(categorized_channels.keys()):
-            # 每个分类的频道按数字排序
-            sorted_channels = sorted(
-                categorized_channels[category], 
-                key=lambda x: channel_key(x[0])
-            )
-            for name, url in sorted_channels:
-                f.write(f"#EXTINF:-1 group-title=\"{category}\",{name}\n")
-                f.write(f"{url}\n")
-    
-    # 生成文本文件（按分类分组）
-    txt_file = os.path.join(output_dir, f"{output_prefix}.txt")
-    with open(txt_file, 'w', encoding='utf-8') as f:
-        for category in sorted(categorized_channels.keys()):
-            f.write(f"{category}\n")
-            # 每个分类的频道按数字排序
-            sorted_channels = sorted(
-                categorized_channels[category], 
-                key=lambda x: channel_key(x[0])
-            )
-            for name, url in sorted_channels:
-                f.write(f"{name},{url}\n")
-            f.write("\n")  # 分类之间空行分隔
-    
-    print(f"已生成M3U文件: {m3u_file}")
-    print(f"已生成文本文件: {txt_file}")
+# 测试频道速度并输出结果
+def test_speed_and_output(channels, output_prefix="itvlist"):
+    task_queue = Queue()
+    speed_results = []
+    error_channels = []
 
+    def worker():
+        while True:
+            channel_name, channel_url = task_queue.get()
+            try:
+                channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
+                lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
+                ts_lists = [line for line in lines if not line.startswith('#')]
+                if not ts_lists:
+                    raise Exception("No valid TS files found.")
+                ts_url = channel_url_t + ts_lists[0].split('/')[-1]
+                start_time = os.times()[0]
+                content = requests.get(ts_url, timeout=5).content
+                end_time = os.times()[0]
+                response_time = end_time - start_time
+                if content:
+                    file_size = len(content)
+                    download_speed = file_size / response_time / 1024
+                    normalized_speed = min(max(download_speed / 1024, 0.001), 100)
+                    speed_results.append((channel_name, channel_url, f"{normalized_speed:.3f} MB/s"))
+            except:
+                error_channels.append((channel_name, channel_url))
+            finally:
+                progress = (len(speed_results) + len(error_channels)) / len(channels) * 100
+                print(f"可用频道：{len(speed_results)} 个 , 不可用频道：{len(error_channels)} 个 , 总频道：{len(channels)} 个 ,总进度：{progress:.2f} %。")
+                task_queue.task_done()
+
+    num_threads = 50
+    for _ in range(num_threads):
+        threading.Thread(target=worker, daemon=True).start()
+
+    for channel in channels:
+        task_queue.put(channel)
+    task_queue.join()
+
+    speed_results.sort(key=lambda x: (channel_key(x[0]), x[0], -float(x[2].split()[0])))
+    result_counter = 8
+
+    def write_to_file(file, results, genre):
+        channel_counters = {}
+        for result in results:
+            channel_name, channel_url, _ = result
+            if genre == '央视频道' and 'CCTV' in channel_name or \
+                    genre == '卫视频道' and '卫视' in channel_name or \
+                    genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
+                if channel_name in channel_counters:
+                    if channel_counters[channel_name] < result_counter:
+                        file.write(f"{channel_name},{channel_url}\n")
+                        channel_counters[channel_name] += 1
+                else:
+                    file.write(f"{channel_name},{channel_url}\n")
+                    channel_counters[channel_name] = 1
+
+    with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as txt_file:
+        txt_file.write('央视频道,#genre#\n')
+        write_to_file(txt_file, speed_results, '央视频道')
+        txt_file.write('卫视频道,#genre#\n')
+        write_to_file(txt_file, speed_results, '卫视频道')
+        txt_file.write('其他频道,#genre#\n')
+        write_to_file(txt_file, speed_results, '其他频道')
+
+    with open(f"{output_prefix}.m3u", 'w', encoding='utf-8') as m3u_file:
+        m3u_file.write('#EXTM3U\n')
+        def write_to_m3u(file, results, genre):
+            channel_counters = {}
+            for result in results:
+                channel_name, channel_url, _ = result
+                if genre == '央视频道' and 'CCTV' in channel_name or \
+                        genre == '卫视频道' and '卫视' in channel_name or \
+                        genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
+                    if channel_name in channel_counters:
+                        if channel_counters[channel_name] < result_counter:
+                            file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
+                            file.write(f"{channel_url}\n")
+                            channel_counters[channel_name] += 1
+                    else:
+                        file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
+                        file.write(f"{channel_url}\n")
+                        channel_counters[channel_name] = 1
+        write_to_m3u(m3u_file, speed_results, '央视频道')
+        write_to_m3u(m3u_file, speed_results, '卫视频道')
+        write_to_m3u(m3u_file, speed_results, '其他频道')
+
+    with open("speed.txt", 'w', encoding='utf-8') as speed_file:
+        for result in speed_results:
+            speed_file.write(f"{','.join(result)}\n")
+
+# 主入口函数
 def main():
-    print("开始IPTV频道探测...")
-    start_time = time.time()
-    
-    all_channels = []
-    
-    # 获取jsmpeg模式的频道
-    print(f"正在处理 {JSMPEG_CSV}...")
-    jsmpeg_channels = get_channels_alltv()
-    all_channels.extend(jsmpeg_channels)
-    print(f"从jsmpeg模式获取了 {len(jsmpeg_channels)} 个频道")
-    
-    # 获取txiptv模式的频道
-    print(f"正在处理 {TXIPTV_CSV}...")
-    loop = asyncio.get_event_loop()
-    txiptv_channels = loop.run_until_complete(get_channels_newnew())
-    all_channels.extend(txiptv_channels)
-    print(f"从txiptv模式获取了 {len(txiptv_channels)} 个频道")
-    
-    # 获取zhgxtv模式的频道
-    print(f"正在处理 {ZHGXTX_CSV}...")
-    zhgxtv_channels = get_channels_zhgxtv()
-    all_channels.extend(zhgxtv_channels)
-    print(f"从zhgxtv模式获取了 {len(zhgxtv_channels)} 个频道")
-    
-    # 去重处理（基于频道名称）
-    unique_channels = []
-    channel_names = set()
-    for name, url in all_channels:
-        if name not in channel_names:
-            channel_names.add(name)
-            unique_channels.append((name, url))
-    
-    print(f"总共获取了 {len(unique_channels)} 个唯一频道")
-    
-    # 生成输出文件
-    generate_output_files(unique_channels)
-    
-    end_time = time.time()
-    print(f"处理完成，耗时: {end_time - start_time:.2f} 秒")
+    parser = argparse.ArgumentParser(description='多模式IPTV频道批量探测与测速')
+    parser.add_argument('--jsmpeg', help='jsmpeg-streamer模式csv文件')
+    parser.add_argument('--txiptv', help='txiptv模式csv文件')
+    parser.add_argument('--zhgxtv', help='zhgxtv模式csv文件')
+    parser.add_argument('--output', default='itvlist', help='输出文件前缀')
+    args = parser.parse_args()
+
+    channels = []
+    if args.jsmpeg:
+        channels.extend(get_channels_alltv(args.jsmpeg))
+    if args.zhgxtv:
+        channels.extend(get_channels_hgxtv(args.zhgxtv))
+    if args.txiptv:
+        channels.extend(asyncio.run(get_channels_newnew(args.txiptv)))
+
+    if not channels:
+        print('请至少指定一个csv文件')
+        return
+
+    test_speed_and_output(channels, args.output)
 
 if __name__ == "__main__":
     main()
