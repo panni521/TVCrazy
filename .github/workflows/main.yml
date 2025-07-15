@@ -3,22 +3,9 @@ name: IPTV Channel Detection
 on:
   # 手动触发
   workflow_dispatch:
-    inputs:
-      jsmpeg_file:
-        description: 'jsmpeg-streamer模式的CSV文件路径'
-        required: false
-        default: 'jsmpeg.csv'
-      txiptv_file:
-        description: 'txiptv模式的CSV文件路径'
-        required: false
-        default: 'txiptv_new.csv'
-      zhgxtv_file:
-        description: 'zhgxtv模式的CSV文件路径'
-        required: false
-        default: 'zhgxtv_new.csv'
-  # 每天凌晨2点自动触发
+  # 每周日凌晨2点自动触发
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * 0'
 
 jobs:
   detect-channels:
@@ -38,39 +25,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests aiohttp
 
-      - name: Create output directory
-        run: mkdir -p output
-
-      - name: Run script with specified modes
+      - name: Run detection script
         run: |
-          # 确定要使用的CSV文件路径
-          JSMPEG_FILE="${{ github.event.inputs.jsmpeg_file || 'jsmpeg.csv' }}"
-          TXIPTV_FILE="${{ github.event.inputs.txiptv_file || 'txiptv_new.csv' }}"
-          ZHGXTV_FILE="${{ github.event.inputs.zhgxtv_file || 'zhgxtv_new.csv' }}"
-          
-          # 构建命令行参数
-          ARGS=""
-          if [ -f "$JSMPEG_FILE" ]; then
-            ARGS="$ARGS --jsmpeg $JSMPEG_FILE"
-          fi
-          if [ -f "$TXIPTV_FILE" ]; then
-            ARGS="$ARGS --txiptv $TXIPTV_FILE"
-          fi
-          if [ -f "$ZHGXTV_FILE" ]; then
-            ARGS="$ARGS --zhgxtv $ZHGXTV_FILE"
-          fi
-          
-          # 执行脚本
-          if [ -n "$ARGS" ]; then
-            python all-z-j-new.py $ARGS --output output/itvlist
+          python all-z-j-new.py
+
+      - name: Commit changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add output/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
           else
-            echo "未找到有效的CSV文件"
-            exit 1
+            git commit -m "Update channel list"
           fi
+
+      - name: Push changes
+        uses: ad-m/github-push-action@v0.6.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
 
       - name: Upload output files
         uses: actions/upload-artifact@v3
         with:
           name: iptv-output
           path: output/
-          retention-days: 7
+          retention-days: 30
