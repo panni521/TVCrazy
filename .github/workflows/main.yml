@@ -3,6 +3,19 @@ name: IPTV Channel Detection
 on:
   # 手动触发
   workflow_dispatch:
+    inputs:
+      jsmpeg_file:
+        description: 'jsmpeg-streamer模式的CSV文件路径'
+        required: false
+        default: 'jsmpeg.csv'
+      txiptv_file:
+        description: 'txiptv模式的CSV文件路径'
+        required: false
+        default: 'txiptv_new.csv'
+      zhgxtv_file:
+        description: 'zhgxtv模式的CSV文件路径'
+        required: false
+        default: 'zhgxtv_new.csv'
   # 每天凌晨2点自动触发
   schedule:
     - cron: '0 2 * * *'
@@ -13,23 +26,51 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.7'
+          python-version: '3.9'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests aiohttp
 
-      - name: Run script
-        run: python all-z-j-new.py --jsmpeg jsmpeg_hosts.csv --txiptv txiptv_hosts.csv --output itvlist
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Run script with specified modes
+        run: |
+          # 确定要使用的CSV文件路径
+          JSMPEG_FILE="${{ github.event.inputs.jsmpeg_file || 'jsmpeg.csv' }}"
+          TXIPTV_FILE="${{ github.event.inputs.txiptv_file || 'txiptv_new.csv' }}"
+          ZHGXTV_FILE="${{ github.event.inputs.zhgxtv_file || 'zhgxtv_new.csv' }}"
+          
+          # 构建命令行参数
+          ARGS=""
+          if [ -f "$JSMPEG_FILE" ]; then
+            ARGS="$ARGS --jsmpeg $JSMPEG_FILE"
+          fi
+          if [ -f "$TXIPTV_FILE" ]; then
+            ARGS="$ARGS --txiptv $TXIPTV_FILE"
+          fi
+          if [ -f "$ZHGXTV_FILE" ]; then
+            ARGS="$ARGS --zhgxtv $ZHGXTV_FILE"
+          fi
+          
+          # 执行脚本
+          if [ -n "$ARGS" ]; then
+            python all-z-j-new.py $ARGS --output output/itvlist
+          else
+            echo "未找到有效的CSV文件"
+            exit 1
+          fi
 
       - name: Upload output files
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
-          name: output-files
+          name: iptv-output
           path: output/
+          retention-days: 7
