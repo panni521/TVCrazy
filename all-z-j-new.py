@@ -8,7 +8,6 @@ import os
 import threading
 from queue import Queue
 import argparse
-import psutil
 
 # 归一化频道名称
 def channel_name_normalize(name):
@@ -45,22 +44,9 @@ def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
     c_prefix = '.'.join(ip_parts[:3])
     return [f"{base_url}{c_prefix}.{i}{port}{suffix if suffix else ''}" for i in range(1, 256)]
 
-# 动态调整并发数
+# 固定并发数，移除对psutil的依赖
 def adjust_concurrency():
-    net_io_counters = psutil.net_io_counters()
-    try:
-        total_bandwidth = psutil.net_if_stats()[list(psutil.net_if_stats().keys())[0]].speed * 1024 * 1024 / 8
-    except (IndexError, AttributeError):
-        total_bandwidth = 100 * 1024 * 1024 / 8  # 默认100Mbps
-    used_bandwidth = net_io_counters.bytes_sent + net_io_counters.bytes_recv
-    available_bandwidth = total_bandwidth - used_bandwidth
-
-    if available_bandwidth > total_bandwidth * 0.8:
-        return 200  # 带宽充足时增加并发数
-    elif available_bandwidth < total_bandwidth * 0.2:
-        return 50  # 带宽紧张时减少并发数
-    else:
-        return 100  # 默认并发数
+    return 100  # 使用固定的默认并发数
 
 # 增加超时重试机制
 def is_url_accessible(url, retries=3):
