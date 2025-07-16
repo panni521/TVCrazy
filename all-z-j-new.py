@@ -8,6 +8,7 @@ import os
 import threading
 from queue import Queue
 import argparse
+import psutil
 
 # 归一化频道名称
 def channel_name_normalize(name):
@@ -44,18 +45,43 @@ def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
     c_prefix = '.'.join(ip_parts[:3])
     return [f"{base_url}{c_prefix}.{i}{port}{suffix if suffix else ''}" for i in range(1, 256)]
 
-# 并发检测URL可用性
-def check_urls_concurrent(urls, timeout=1, max_workers=100, print_valid=True):
-    def is_url_accessible(url):
+# 动态调整并发数
+def adjust_concurrency():
+    net_io_counters = psutil.net_io_counters()
+    try:
+        total_bandwidth = psutil.net_if_stats()[list(psutil.net_if_stats().keys())[0]].speed * 1024 * 1024 / 8
+    except (IndexError, AttributeError):
+        total_bandwidth = 100 * 1024 * 1024 / 8  # 默认100Mbps
+    used_bandwidth = net_io_counters.bytes_sent + net_io_counters.bytes_recv
+    available_bandwidth = total_bandwidth - used_bandwidth
+
+    if available_bandwidth > total_bandwidth * 0.8:
+        return 200  # 带宽充足时增加并发数
+    elif available_bandwidth < total_bandwidth * 0.2:
+        return 50  # 带宽紧张时减少并发数
+    else:
+        return 100  # 默认并发数
+
+# 增加超时重试机制
+def is_url_accessible(url, retries=3):
+    for _ in range(retries):
         try:
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=1)
             return url if response.status_code == 200 else None
         except requests.RequestException:
-            return None
+            continue
+    return None
+
+# 并发检测URL可用性
+def check_urls_concurrent(urls, timeout=1, print_valid=True):
+    max_workers = adjust_concurrency()
+
+    def check_url(url):
+        return is_url_accessible(url)
 
     valid_urls = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(is_url_accessible, url) for url in urls]
+        futures = [executor.submit(check_url, url) for url in urls]
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             if result:
@@ -257,8 +283,26 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
         task_queue.put(channel)
     task_queue.join()
 
-    speed_results.sort(key=lambda x: (channel_key(x[0]), x[0], -float(x[2].split()[0])))
-    result_counter = 8
+    # 按速度排序并筛选每个频道最多8个源
+    from collections import defaultdict
+    channel_sources = defaultdict(list)
+    for channel_name, channel_url, speed in speed_results:
+        channel_sources[channel_name].append((channel_url, speed))
+
+    optimized_sources = []
+    for channel_name, sources in channel_sources.items():
+        sorted_sources = sorted(sources, key=lambda x: float(x[1].split()[0]), reverse=True)[:8]
+        for url, speed in sorted_sources:
+            optimized_sources.append((channel_name, url, speed))
+
+    # 去重
+    unique_channels = []
+    seen = set()
+    for channel_name, channel_url, speed in optimized_sources:
+        key = (channel_name, channel_url)
+        if key not in seen:
+            unique_channels.append((channel_name, channel_url, speed))
+            seen.add(key)
 
     def write_to_file(file, results, genre):
         channel_counters = {}
@@ -268,7 +312,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
                     genre == '卫视频道' and '卫视' in channel_name or \
                     genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
                 if channel_name in channel_counters:
-                    if channel_counters[channel_name] < result_counter:
+                    if channel_counters[channel_name] < 8:
                         file.write(f"{channel_name},{channel_url}\n")
                         channel_counters[channel_name] += 1
                 else:
@@ -277,11 +321,11 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
 
     with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as txt_file:
         txt_file.write('央视频道,#genre#\n')
-        write_to_file(txt_file, speed_results, '央视频道')
+        write_to_file(txt_file, unique_channels, '央视频道')
         txt_file.write('卫视频道,#genre#\n')
-        write_to_file(txt_file, speed_results, '卫视频道')
+        write_to_file(txt_file, unique_channels, '卫视频道')
         txt_file.write('其他频道,#genre#\n')
-        write_to_file(txt_file, speed_results, '其他频道')
+        write_to_file(txt_file, unique_channels, '其他频道')
 
     with open(f"{output_prefix}.m3u", 'w', encoding='utf-8') as m3u_file:
         m3u_file.write('#EXTM3U\n')
@@ -293,7 +337,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
                         genre == '卫视频道' and '卫视' in channel_name or \
                         genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
                     if channel_name in channel_counters:
-                        if channel_counters[channel_name] < result_counter:
+                        if channel_counters[channel_name] < 8:
                             file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
                             file.write(f"{channel_url}\n")
                             channel_counters[channel_name] += 1
@@ -301,12 +345,12 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
                         file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
                         file.write(f"{channel_url}\n")
                         channel_counters[channel_name] = 1
-        write_to_m3u(m3u_file, speed_results, '央视频道')
-        write_to_m3u(m3u_file, speed_results, '卫视频道')
-        write_to_m3u(m3u_file, speed_results, '其他频道')
+        write_to_m3u(m3u_file, unique_channels, '央视频道')
+        write_to_m3u(m3u_file, unique_channels, '卫视频道')
+        write_to_m3u(m3u_file, unique_channels, '其他频道')
 
     with open("speed.txt", 'w', encoding='utf-8') as speed_file:
-        for result in speed_results:
+        for result in unique_channels:
             speed_file.write(f"{','.join(result)}\n")
 
 # 主入口函数
