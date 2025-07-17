@@ -1,20 +1,25 @@
 import re
 import csv
 import requests
-import concurrent.futures
 import asyncio
 import aiohttp
 import os
-import threading
-from queue import Queue
 import argparse
 import time
 import random
 from urllib.parse import urlparse
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("iptv_probe.log"),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # 扩展的频道分类映射
@@ -71,13 +76,6 @@ def channel_name_normalize(name):
     name = name_map.get(name, name)
     return name
 
-# 获取频道名称中的数字
-def channel_key(channel_name):
-    match = re.search(r'\d+', channel_name)
-    if match:
-        return int(match.group())
-    return float('inf')
-
 # 从频道名称提取元数据
 def extract_channel_metadata(channel_name):
     metadata = {
@@ -130,38 +128,32 @@ def get_channel_language(channel_name):
 
 # 生成同一C段的所有IP的URL
 def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
-    ip_parts = ip_address.split('.')
-    if len(ip_parts) < 3:
-        return []
-    c_prefix = '.'.join(ip_parts[:3])
-    return [f"{base_url}{c_prefix}.{i}{port}{suffix if suffix else ''}" for i in range(1, 256)]
-
-# 自适应并发数，根据系统性能和网络状况调整
-def adjust_concurrency():
     try:
-        import psutil
-        cpu_count = psutil.cpu_count(logical=False)
-        memory_percent = psutil.virtual_memory().percent
-        # 根据CPU核心数和内存使用情况动态调整并发数
-        if memory_percent < 70:
-            return max(50, cpu_count * 10)
-        else:
-            return max(30, cpu_count * 5)
-    except ImportError:
-        return 100  # 默认并发数
+        ip_parts = ip_address.split('.')
+        if len(ip_parts) < 3:
+            return []
+        c_prefix = '.'.join(ip_parts[:3])
+        return [f"{base_url}{c_prefix}.{i}{port}{suffix if suffix else ''}" for i in range(1, 256)]
+    except Exception as e:
+        logger.error(f"生成IP范围失败: {e}")
+        return []
 
 # 获取代理列表
 def get_proxy_list(proxy_file=None):
     if not proxy_file or not os.path.exists(proxy_file):
         return []
     
-    with open(proxy_file, 'r') as f:
-        proxies = [line.strip() for line in f if line.strip()]
-    
-    return [{"http": proxy, "https": proxy} for proxy in proxies]
+    try:
+        with open(proxy_file, 'r') as f:
+            proxies = [line.strip() for line in f if line.strip()]
+        
+        return [{"http": proxy, "https": proxy} for proxy in proxies]
+    except Exception as e:
+        logger.error(f"加载代理列表失败: {e}")
+        return []
 
 # 深度检查URL是否为可用的IPTV源
-def is_valid_iptv_source(url, retries=3, proxies=None):
+async def is_valid_iptv_source(url, retries=3, proxies=None, session=None):
     """
     深度检查URL是否为可用的IPTV源
     1. 检查HTTP状态码
@@ -176,69 +168,84 @@ def is_valid_iptv_source(url, retries=3, proxies=None):
     for attempt in range(retries):
         try:
             proxy = random.choice(proxy_list + [None]) if proxy_list else None
-            # 第一阶段：检查M3U8文件
-            response = requests.get(url, timeout=5, headers=headers, proxies=proxy)
-            if response.status_code != 200:
-                continue
-                
-            content_type = response.headers.get('Content-Type', '')
-            if 'mpegurl' not in content_type and 'x-mpegurl' not in content_type:
-                # 尝试从内容判断
-                if not response.text.startswith('#EXTM3U'):
-                    logger.debug(f"{url} 不是有效的M3U8文件")
-                    continue
             
-            # 第二阶段：解析M3U8文件
-            lines = response.text.strip().split('\n')
-            if not lines or not lines[0].startswith('#EXTM3U'):
-                logger.debug(f"{url} 不包含M3U8头部")
-                continue
-                
-            ts_files = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
-            if not ts_files:
-                logger.debug(f"{url} 不包含有效的媒体片段")
-                continue
-                
-            # 第三阶段：随机选择一个TS文件测试
-            base_url = url.rsplit('/', 1)[0] + '/'
-            test_ts_url = ts_files[0]
-            if not test_ts_url.startswith(('http://', 'https://')):
-                test_ts_url = base_url + test_ts_url
-            
-            ts_response = requests.get(test_ts_url, timeout=8, headers=headers, proxies=proxy)
-            if ts_response.status_code == 200 and len(ts_response.content) > 1024:  # 确保内容大小合理
-                return url
+            # 使用传入的session或创建临时session
+            if session:
+                async with session.get(url, timeout=8, headers=headers, proxy=proxy) as response:
+                    if response.status != 200:
+                        continue
+                    
+                    content = await response.text()
+                    if not content.startswith('#EXTM3U'):
+                        logger.debug(f"{url} 不是有效的M3U8文件")
+                        continue
+                    
+                    lines = content.strip().split('\n')
+                    ts_files = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
+                    if not ts_files:
+                        logger.debug(f"{url} 不包含有效的媒体片段")
+                        continue
+                    
+                    # 测试TS文件
+                    base_url = url.rsplit('/', 1)[0] + '/'
+                    test_ts_url = ts_files[0]
+                    if not test_ts_url.startswith(('http://', 'https://')):
+                        test_ts_url = base_url + test_ts_url
+                    
+                    async with session.get(test_ts_url, timeout=10, headers=headers, proxy=proxy) as ts_response:
+                        if ts_response.status == 200 and await ts_response.content.read(1024):
+                            return url
+            else:
+                # 同步模式，仅在没有session时使用
+                with requests.get(url, timeout=8, headers=headers, proxies=proxy) as response:
+                    if response.status_code != 200:
+                        continue
+                    
+                    if not response.text.startswith('#EXTM3U'):
+                        logger.debug(f"{url} 不是有效的M3U8文件")
+                        continue
+                    
+                    lines = response.text.strip().split('\n')
+                    ts_files = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
+                    if not ts_files:
+                        logger.debug(f"{url} 不包含有效的媒体片段")
+                        continue
+                    
+                    # 测试TS文件
+                    base_url = url.rsplit('/', 1)[0] + '/'
+                    test_ts_url = ts_files[0]
+                    if not test_ts_url.startswith(('http://', 'https://')):
+                        test_ts_url = base_url + test_ts_url
+                    
+                    with requests.get(test_ts_url, timeout=10, headers=headers, proxies=proxy) as ts_response:
+                        if ts_response.status_code == 200 and len(ts_response.content) > 1024:
+                            return url
         except Exception as e:
             logger.debug(f"尝试访问 {url} 失败 (尝试 {attempt+1}/{retries}): {e}")
             continue
     
     return None
 
-# 并发检测URL可用性
-def check_urls_concurrent(urls, timeout=3, print_valid=True, proxies=None):
-    max_workers = adjust_concurrency()
+# 异步检测URL可用性
+async def check_urls_async(urls, proxies=None, concurrency=100):
     valid_urls = []
+    semaphore = asyncio.Semaphore(concurrency)
     
-    def check_url(url):
-        return is_valid_iptv_source(url, retries=3, proxies=proxies)
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(check_url, url): url for url in urls}
-        for future in concurrent.futures.as_completed(futures):
-            url = futures[future]
-            try:
-                result = future.result()
+    async def check_single_url(url):
+        async with semaphore:
+            async with aiohttp.ClientSession() as session:
+                result = await is_valid_iptv_source(url, retries=3, proxies=proxies, session=session)
                 if result:
-                    valid_urls.append(result)
-                    if print_valid:
-                        logger.info(f"有效URL: {result}")
-            except Exception as e:
-                logger.error(f"检测URL {url} 时出错: {e}")
+                    logger.info(f"有效URL: {result}")
+                    return result
+                return None
     
-    return valid_urls
+    tasks = [check_single_url(url) for url in urls]
+    results = await asyncio.gather(*tasks)
+    return [result for result in results if result]
 
 # jsmpeg模式获取频道
-def get_channels_alltv(csv_file, proxies=None):
+async def get_channels_alltv(csv_file, proxies=None):
     urls = set()
     try:
         with open(csv_file, 'r', encoding='utf-8-sig') as f:
@@ -253,40 +260,46 @@ def get_channels_alltv(csv_file, proxies=None):
         ip_range_urls = []
         for url in urls:
             try:
-                ip_start = url.find("//") + 2
-                ip_end = url.find(":", ip_start)
-                base_url = url[:ip_start]
-                ip_address = url[ip_start:ip_end]
-                port = url[ip_end:]
+                parsed = urlparse(url)
+                ip_address = parsed.hostname
+                port = f":{parsed.port}" if parsed.port else ""
+                base_url = f"{parsed.scheme}://"
                 ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port))
-            except:
-                logger.error(f"处理URL {url} 时出错")
+            except Exception as e:
+                logger.error(f"处理URL {url} 时出错: {e}")
                 continue
         
-        valid_urls = check_urls_concurrent(set(ip_range_urls), proxies=proxies)
+        valid_urls = await check_urls_async(set(ip_range_urls), proxies=proxies)
         channels = []
         
-        for url in valid_urls:
+        async def fetch_channel_data(url):
             try:
-                json_url = f"{url.rstrip('/')}/streamer/list"
-                json_data = requests.get(json_url, timeout=3).json()
-                host = url.rstrip('/')
-                for item in json_data:
-                    name = item.get('name', '').strip()
-                    key = item.get('key', '').strip()
-                    if name and key:
-                        channel_url = f"{host}/hls/{key}/index.m3u8"
-                        channels.append((channel_name_normalize(name), channel_url))
+                async with aiohttp.ClientSession() as session:
+                    json_url = f"{url.rstrip('/')}/streamer/list"
+                    async with session.get(json_url, timeout=5) as response:
+                        json_data = await response.json()
+                        host = url.rstrip('/')
+                        return [(channel_name_normalize(item.get('name', '').strip()), 
+                                f"{host}/hls/{item.get('key', '').strip()}/index.m3u8") 
+                                for item in json_data if item.get('name') and item.get('key')]
             except Exception as e:
                 logger.error(f"获取频道列表 from {url} 失败: {e}")
-                continue
+                return []
+        
+        # 并发获取所有有效URL的频道数据
+        async with asyncio.Semaphore(50):
+            tasks = [fetch_channel_data(url) for url in valid_urls]
+            results = await asyncio.gather(*tasks)
+        
+        for sublist in results:
+            channels.extend(sublist)
         
         return channels
     except Exception as e:
         logger.error(f"处理jsmpeg模式CSV文件失败: {e}")
         return []
 
-# txiptv模式获取频道（异步）
+# txiptv模式获取频道
 async def get_channels_newnew(csv_file, proxies=None):
     try:
         with open(csv_file, 'r', encoding='utf-8-sig') as f:
@@ -295,98 +308,72 @@ async def get_channels_newnew(csv_file, proxies=None):
         
         async def modify_urls(url):
             try:
-                ip_start = url.find("//") + 2
-                ip_end = url.find(":", ip_start)
-                base_url = url[:ip_start]
-                ip_address = url[ip_start:ip_end]
+                parsed = urlparse(url)
+                ip_address = parsed.hostname
+                port = f":{parsed.port}" if parsed.port else ""
+                base_url = f"{parsed.scheme}://"
                 ip_parts = ip_address.split('.')
                 if len(ip_parts) < 3:
                     return []
                 c_prefix = '.'.join(ip_parts[:3])
-                port = url[ip_end:]
-                ip_end = "/iptv/live/1000.json?key=txiptv"
-                return [f"{base_url}{c_prefix}.{i}{port}{ip_end}" for i in range(1, 256)]
+                return [f"{base_url}{c_prefix}.{i}{port}/iptv/live/1000.json?key=txiptv" for i in range(1, 256)]
             except:
                 return []
         
-        async def is_url_accessible(session, url, semaphore):
+        async def check_url(session, url, semaphore):
             async with semaphore:
                 try:
-                    # 随机选择代理
                     proxy = random.choice(proxies + [None]) if proxies else None
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                    async with session.get(url, timeout=3, headers=headers, proxy=proxy) as response:
+                    async with session.get(url, timeout=5, proxy=proxy) as response:
                         return url if response.status == 200 else None
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                except Exception as e:
                     logger.debug(f"尝试访问 {url} 失败: {e}")
                     return None
         
-        async def check_urls(session, urls, semaphore):
-            tasks = []
-            for url in urls:
-                modified_urls = await modify_urls(url)
-                tasks.extend(asyncio.create_task(is_url_accessible(session, modified_url, semaphore)) for modified_url in modified_urls)
-            results = await asyncio.gather(*tasks)
-            valid_urls = [result for result in results if result]
-            for url in valid_urls:
-                logger.info(f"有效URL: {url}")
-            return valid_urls
-        
-        async def fetch_json(session, url, semaphore):
+        async def fetch_channels(session, url, semaphore):
             async with semaphore:
                 try:
-                    ip_start = url.find("//") + 2
-                    ip_index = url.find("/", url.find(".") + 1)
-                    base_url = url[:ip_start]
-                    ip_address = url[ip_start:ip_index]
-                    url_x = f"{base_url}{ip_address}"
-                    json_data = await session.get(url, timeout=3).json()
-                    channels = []
-                    for item in json_data.get('data', []):
-                        if isinstance(item, dict):
-                            name = item.get('name')
-                            urlx = item.get('url')
-                            if ',' in urlx:
-                                urlx = "aaaaaaaa"
-                            urld = urlx if 'http' in urlx else f"{url_x}{urlx}"
-                            if name and urlx:
+                    parsed = urlparse(url)
+                    base_url = f"{parsed.scheme}://{parsed.hostname}"
+                    async with session.get(url, timeout=5) as response:
+                        json_data = await response.json()
+                        channels = []
+                        for item in json_data.get('data', []):
+                            if isinstance(item, dict):
+                                name = item.get('name')
+                                urlx = item.get('url')
+                                if not urlx or ',' in urlx:
+                                    continue
+                                urld = urlx if 'http' in urlx else f"{base_url}{urlx}"
                                 channels.append((channel_name_normalize(name), urld))
-                    return channels
-                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+                        return channels
+                except Exception as e:
                     logger.error(f"获取JSON数据 from {url} 失败: {e}")
                     return []
         
-        x_urls = []
+        # 生成所有可能的URL
+        all_urls = []
         for url in urls:
-            try:
-                ip_start = url.find("//") + 2
-                ip_end = url.find(":", ip_start)
-                ip_dot = url.find(".") + 1
-                ip_address = url[ip_start:url.find(".", ip_dot, url.find(".", ip_dot + 1)) + 1]
-                port = url[ip_end:]
-                x_urls.append(f"{url[:ip_start]}{ip_address}1{port}")
-            except:
-                logger.error(f"处理URL {url} 时出错")
-                continue
+            modified = await modify_urls(url)
+            all_urls.extend(modified)
         
-        unique_urls = set(x_urls)
-        semaphore = asyncio.Semaphore(500)
+        # 检查URL有效性
+        async with aiohttp.ClientSession() as session:
+            semaphore = asyncio.Semaphore(500)
+            tasks = [check_url(session, url, semaphore) for url in all_urls]
+            valid_urls = [url for url in await asyncio.gather(*tasks) if url]
         
-        # 创建代理会话
-        conn = aiohttp.TCPConnector(limit_per_host=100)
-        async with aiohttp.ClientSession(connector=conn) as session:
-            valid_urls = await check_urls(session, unique_urls, semaphore)
-            tasks = [asyncio.create_task(fetch_json(session, url, semaphore)) for url in valid_urls]
-            results = await asyncio.gather(*tasks)
-            return [channel for sublist in results for channel in sublist]
+        # 获取频道数据
+        tasks = [fetch_channels(aiohttp.ClientSession(), url, semaphore) for url in valid_urls]
+        results = await asyncio.gather(*tasks)
+        
+        return [channel for sublist in results for channel in sublist]
     except Exception as e:
         logger.error(f"处理txiptv模式CSV文件失败: {e}")
         return []
 
 # zhgxtv模式获取频道
-def get_channels_hgxtv(csv_file, proxies=None):
+async def get_channels_hgxtv(csv_file, proxies=None):
     urls = set()
     try:
         with open(csv_file, 'r', encoding='utf-8-sig') as csvfile:
@@ -400,36 +387,51 @@ def get_channels_hgxtv(csv_file, proxies=None):
         ip_range_urls = []
         for url in urls:
             try:
-                ip_start = url.find("//") + 2
-                ip_end = url.find(":", ip_start)
-                base_url = url[:ip_start]
-                ip_address = url[ip_start:ip_end]
-                port = url[ip_end:]
+                parsed = urlparse(url)
+                ip_address = parsed.hostname
+                port = f":{parsed.port}" if parsed.port else ""
+                base_url = f"{parsed.scheme}://"
                 ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, "/ZHGXTV/Public/json/live_interface.txt"))
             except:
                 logger.error(f"处理URL {url} 时出错")
                 continue
         
-        valid_urls = check_urls_concurrent(set(ip_range_urls), proxies=proxies)
+        valid_urls = await check_urls_async(set(ip_range_urls), proxies=proxies)
         channels = []
         
-        for url in valid_urls:
+        async def fetch_channels(url):
             try:
-                json_data = requests.get(url, timeout=3).content.decode('utf-8')
-                for line in json_data.split('\n'):
-                    line = line.strip()
-                    if line:
-                        try:
-                            name, channel_url = line.split(',')
-                            urls_parts = channel_url.split('/', 3)
-                            url_data_parts = url.split('/', 3)
-                            urld = f"{urls_parts[0]}//{url_data_parts[2]}/{urls_parts[3]}" if len(urls_parts) >= 4 else f"{urls_parts[0]}//{url_data_parts[2]}"
-                            channels.append((channel_name_normalize(name), urld))
-                        except:
-                            continue
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=5) as response:
+                        content = await response.text()
+                        channel_list = []
+                        for line in content.split('\n'):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                name, channel_url = line.split(',')
+                                parsed_url = urlparse(url)
+                                url_parts = channel_url.split('/', 3)
+                                if len(url_parts) >= 4:
+                                    urld = f"{url_parts[0]}//{parsed_url.hostname}/{url_parts[3]}"
+                                else:
+                                    urld = f"{url_parts[0]}//{parsed_url.hostname}"
+                                channel_list.append((channel_name_normalize(name), urld))
+                            except:
+                                continue
+                        return channel_list
             except Exception as e:
                 logger.error(f"获取频道列表 from {url} 失败: {e}")
-                continue
+                return []
+        
+        # 并发获取所有有效URL的频道数据
+        async with asyncio.Semaphore(50):
+            tasks = [fetch_channels(url) for url in valid_urls]
+            results = await asyncio.gather(*tasks)
+        
+        for sublist in results:
+            channels.extend(sublist)
         
         return channels
     except Exception as e:
@@ -462,8 +464,8 @@ def sort_channels(channels, sort_rules=None):
                 value = float(value)
             elif field == 'category':
                 # 确保分类按预定义顺序排列
-                category_order = [info['name'] for info in CHANNEL_CATEGORIES.values()]
-                value = category_order.index(value) if value in category_order else len(category_order)
+                category_order = list(CHANNEL_CATEGORIES.values())
+                value = next((i for i, cat in enumerate(category_order) if cat['name'] == value), len(category_order))
             
             # 处理排序方向
             key_values.append(value if direction == 'asc' else -value)
@@ -500,88 +502,78 @@ def apply_custom_sort(channels, sort_config_file):
     
     return channels
 
-# 多维度测试频道速度并输出结果
-def test_speed_and_output(channels, output_prefix="itvlist", proxy_file=None, sort_config=None):
-    task_queue = Queue()
+# 测试频道速度并输出结果
+async def test_speed_and_output(channels, output_prefix="itvlist", proxy_file=None, sort_config=None):
+    proxy_list = get_proxy_list(proxy_file) if proxy_file else []
     channel_results = []
     error_channels = []
-    proxy_list = get_proxy_list(proxy_file) if proxy_file else []
     
-    def worker():
-        while True:
-            channel_name, channel_url = task_queue.get()
-            try:
-                # 测试连接可用性
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                }
-                
-                # 随机选择代理
-                proxy = random.choice(proxy_list + [None]) if proxy_list else None
-                
-                # 测试M3U8文件获取
+    async def test_channel(channel_name, channel_url):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        proxy = random.choice(proxy_list + [None]) if proxy_list else None
+        
+        try:
+            # 测试M3U8文件获取
+            async with aiohttp.ClientSession() as session:
                 start_time = time.time()
-                response = requests.get(channel_url, timeout=5, headers=headers, proxies=proxy)
-                m3u8_time = time.time() - start_time
-                
-                if response.status_code != 200:
-                    raise Exception(f"获取M3U8失败，状态码: {response.status_code}")
-                
-                lines = response.text.strip().split('\n')
-                ts_lists = [line for line in lines if not line.startswith('#') and line.endswith('.ts')]
-                
-                if not ts_lists:
-                    raise Exception("No valid TS files found.")
-                
-                # 测试TS文件获取
-                channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
-                ts_url = channel_url_t + ts_lists[0].split('/')[-1]
-                
-                start_time = time.time()
-                ts_response = requests.get(ts_url, timeout=5, headers=headers, proxies=proxy)
-                ts_time = time.time() - start_time
-                
-                if ts_response.status_code != 200:
-                    raise Exception(f"获取TS文件失败，状态码: {ts_response.status_code}")
-                
-                file_size = len(ts_response.content)
-                download_speed = file_size / ts_time / 1024 / 1024  # MB/s
-                
-                # 计算频道质量评分 (综合考虑速度和响应时间)
-                quality_score = min(max(download_speed * 10, 0.1), 100)  # 归一化到0.1-100
-                
-                channel_results.append({
-                    'name': channel_name,
-                    'url': channel_url,
-                    'speed': f"{download_speed:.3f} MB/s",
-                    'm3u8_time': f"{m3u8_time:.3f} s",
-                    'ts_time': f"{ts_time:.3f} s",
-                    'quality': f"{quality_score:.2f}",
-                    'category': get_channel_category(channel_name),
-                    'region': get_channel_region(channel_name),
-                    'language': get_channel_language(channel_name)
-                })
-                
-                logger.info(f"测试成功: {channel_name} - {download_speed:.3f} MB/s")
-            except Exception as e:
-                error_channels.append((channel_name, channel_url, str(e)))
-                logger.debug(f"测试失败: {channel_name} - {str(e)}")
-            finally:
-                progress = (len(channel_results) + len(error_channels)) / len(channels) * 100
-                logger.info(f"进度: {len(channel_results)}/{len(channels)} 可用, {len(error_channels)} 失败, 总进度: {progress:.2f}%")
-                task_queue.task_done()
+                async with session.get(channel_url, timeout=8, headers=headers, proxy=proxy) as response:
+                    if response.status != 200:
+                        raise Exception(f"获取M3U8失败，状态码: {response.status}")
+                    
+                    m3u8_time = time.time() - start_time
+                    content = await response.text()
+                    lines = content.strip().split('\n')
+                    ts_lists = [line for line in lines if not line.startswith('#') and line.endswith('.ts')]
+                    
+                    if not ts_lists:
+                        raise Exception("未找到有效的TS文件")
+                    
+                    # 测试TS文件获取
+                    base_url = channel_url.rsplit('/', 1)[0] + '/'
+                    ts_url = base_url + ts_lists[0].split('/')[-1]
+                    
+                    start_time = time.time()
+                    async with session.get(ts_url, timeout=10, headers=headers, proxy=proxy) as ts_response:
+                        if ts_response.status != 200:
+                            raise Exception(f"获取TS文件失败，状态码: {ts_response.status}")
+                        
+                        ts_time = time.time() - start_time
+                        file_size = len(await ts_response.read())
+                        download_speed = file_size / ts_time / 1024 / 1024  # MB/s
+                        
+                        # 计算频道质量评分
+                        quality_score = min(max(download_speed * 10, 0.1), 100)  # 归一化到0.1-100
+                        
+                        channel_results.append({
+                            'name': channel_name,
+                            'url': channel_url,
+                            'speed': f"{download_speed:.3f} MB/s",
+                            'm3u8_time': f"{m3u8_time:.3f} s",
+                            'ts_time': f"{ts_time:.3f} s",
+                            'quality': f"{quality_score:.2f}",
+                            'category': get_channel_category(channel_name),
+                            'region': get_channel_region(channel_name),
+                            'language': get_channel_language(channel_name)
+                        })
+                        
+                        logger.info(f"测试成功: {channel_name} - {download_speed:.3f} MB/s")
+        except Exception as e:
+            error_channels.append((channel_name, channel_url, str(e)))
+            logger.debug(f"测试失败: {channel_name} - {str(e)}")
     
-    # 启动工作线程
-    num_threads = adjust_concurrency()
-    for _ in range(num_threads):
-        threading.Thread(target=worker, daemon=True).start()
+    # 并发测试所有频道
+    concurrency = min(200, len(channels))
+    semaphore = asyncio.Semaphore(concurrency)
     
-    # 添加所有频道到任务队列
-    for channel in channels:
-        task_queue.put(channel)
+    async def bounded_test(channel):
+        async with semaphore:
+            await test_channel(*channel)
     
-    # 等待所有任务完成
-    task_queue.join()
+    tasks = [bounded_test(channel) for channel in channels]
+    await asyncio.gather(*tasks)
     
     # 按频道分组并按质量排序
     from collections import defaultdict
@@ -665,7 +657,7 @@ def test_speed_and_output(channels, output_prefix="itvlist", proxy_file=None, so
     logger.info(f"结果已保存到: {output_prefix}.txt, {output_prefix}.m3u, {output_prefix}_report.txt")
 
 # 主入口函数
-def main():
+async def main():
     parser = argparse.ArgumentParser(description='多模式IPTV频道批量探测与测速')
     parser.add_argument('--jsmpeg', help='jsmpeg-streamer模式csv文件')
     parser.add_argument('--txiptv', help='txiptv模式csv文件')
@@ -687,24 +679,34 @@ def main():
     
     # 获取所有频道
     channels = []
+    start_time = time.time()
+    
+    # 并发处理不同模式
+    tasks = []
     if args.jsmpeg:
         logger.info(f"正在处理jsmpeg模式CSV文件: {args.jsmpeg}")
-        channels.extend(get_channels_alltv(args.jsmpeg, proxy_list))
+        tasks.append(get_channels_alltv(args.jsmpeg, proxy_list))
     if args.zhgxtv:
         logger.info(f"正在处理zhgxtv模式CSV文件: {args.zhgxtv}")
-        channels.extend(get_channels_hgxtv(args.zhgxtv, proxy_list))
+        tasks.append(get_channels_hgxtv(args.zhgxtv, proxy_list))
     if args.txiptv:
         logger.info(f"正在处理txiptv模式CSV文件: {args.txiptv}")
-        channels.extend(asyncio.run(get_channels_newnew(args.txiptv, proxy_list)))
+        tasks.append(get_channels_newnew(args.txiptv, proxy_list))
+    
+    # 执行所有任务
+    results = await asyncio.gather(*tasks)
+    for result in results:
+        channels.extend(result)
     
     if not channels:
         logger.error('没有找到可用的频道')
         return
     
-    logger.info(f"找到 {len(channels)} 个频道，开始测试速度...")
+    duration = time.time() - start_time
+    logger.info(f"找到 {len(channels)} 个频道，耗时 {duration:.2f} 秒，开始测试速度...")
     
     # 测试速度并输出结果
-    test_speed_and_output(channels, args.output, args.proxy, args.sort_config)
+    await test_speed_and_output(channels, args.output, args.proxy, args.sort_config)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
