@@ -270,32 +270,34 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
             channel_name, channel_url = task_queue.get()
             total_speed = 0
             valid_tests = 0
-            for _ in range(3):  # 进行3次测试
-                try:
-                    channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
-                    lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
-                    ts_lists = [line for line in lines if not line.startswith('#')]
-                    if not ts_lists:
-                        raise Exception("No valid TS files found.")
-                    ts_url = channel_url_t + ts_lists[0].split('/')[-1]
-                    start_time = os.times()[0]
-                    content = requests.get(ts_url, timeout=5).content
-                    end_time = os.times()[0]
-                    response_time = end_time - start_time
-                    if content:
-                        file_size = len(content)
-                        download_speed = file_size / response_time / 1024
-                        total_speed += download_speed
-                        valid_tests += 1
-                except:
-                    continue
-            if valid_tests > 0:
-                average_speed = total_speed / valid_tests
-                normalized_speed = min(max(average_speed / 1024, 0.001), 100)
-                speed_results.append((channel_name, channel_url, f"{normalized_speed:.3f} MB/s"))
-            else:
-                error_channels.append((channel_name, channel_url))
-            finally:
+            try:  # 添加缺失的try块
+                for _ in range(3):  # 进行3次测试
+                    try:
+                        channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
+                        lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
+                        ts_lists = [line for line in lines if not line.startswith('#')]
+                        if not ts_lists:
+                            raise Exception("No valid TS files found.")
+                        ts_url = channel_url_t + ts_lists[0].split('/')[-1]
+                        start_time = os.times()[0]
+                        content = requests.get(ts_url, timeout=5).content
+                        end_time = os.times()[0]
+                        response_time = end_time - start_time
+                        if content:
+                            file_size = len(content)
+                            download_speed = file_size / response_time / 1024
+                            total_speed += download_speed
+                            valid_tests += 1
+                    except Exception as e:
+                        print(f"测试失败: {e}")
+                        continue
+                if valid_tests > 0:
+                    average_speed = total_speed / valid_tests
+                    normalized_speed = min(max(average_speed / 1024, 0.001), 100)
+                    speed_results.append((channel_name, channel_url, f"{normalized_speed:.3f} MB/s"))
+                else:
+                    error_channels.append((channel_name, channel_url))
+            finally:  # 确保无论测试成功或失败都更新进度
                 progress = (len(speed_results) + len(error_channels)) / len(channels) * 100
                 print(f"可用频道：{len(speed_results)} 个 , 不可用频道：{len(error_channels)} 个 , 总频道：{len(channels)} 个 ,总进度：{progress:.2f} %。")
                 task_queue.task_done()
@@ -374,6 +376,11 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
                 file.write(f"{channel_name},{channel_url}\n")
                 channel_counters[channel_name] = 1
 
+    # 创建输出目录（如果不存在）
+    output_dir = os.path.dirname(output_prefix)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
     with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as txt_file:
         txt_file.write('央视频道,#genre#\n')
         write_to_file(txt_file, unique_channels, '央视频道')
@@ -437,7 +444,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
         write_to_m3u(m3u_file, unique_channels, '音乐频道')
         write_to_m3u(m3u_file, unique_channels, '其他频道')
 
-    with open("speed.txt", 'w', encoding='utf-8') as speed_file:
+    with open(f"{output_prefix}_speed.txt", 'w', encoding='utf-8') as speed_file:
         for result in unique_channels:
             speed_file.write(f"{','.join(result)}\n")
 
@@ -462,7 +469,9 @@ def main():
         print('请至少指定一个csv文件')
         return
 
+    print(f"开始处理 {len(channels)} 个频道...")
     test_speed_and_output(channels, args.output)
+    print(f"处理完成，结果已保存到: {args.output}.txt 和 {args.output}.m3u")
 
 if __name__ == "__main__":
     main()
