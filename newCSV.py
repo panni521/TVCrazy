@@ -8,47 +8,26 @@ import os
 import threading
 from queue import Queue
 import argparse
-from collections import defaultdict
-
-# 频道名称智能识别类
-class ChannelNameClassifier:
-    def __init__(self):
-        # 基础频道名称映射表
-        self.base_patterns = {
-            r'^CCTV\s*(\d+)\s*[+＋]?': r'CCTV\1+',
-            r'^CCTV\s*(\d+)': r'CCTV\1',
-            r'^(\w+卫视)': r'\1',
-            r'^(\w+新闻)': r'\1',
-            r'^(\w+电影)': r'\1',
-            r'^(\w+体育)': r'\1',
-            r'^(\w+少儿)': r'\1',
-            r'^(\w+音乐)': r'\1',
-        }
-        # 常见干扰词，用于去除频道名称中的冗余信息
-        self.interference_words = [
-            "高清", "超清", "标清", "HD", "SD", "4K", "测试", "TV", "频道", 
-            "卫视", "中央", "电视台", "中国", "网络", "直播", "官网",
-            "官方", "CN", "China", "Plus", "＋", "+", "(", ")", "【", "】",
-            "-", "_", " ", "/"
-        ]
-    
-    def normalize(self, name):
-        # 移除干扰词
-        for word in self.interference_words:
-            name = name.replace(word, "")
-        # 转换为大写
-        name = name.upper()
-        # 应用基础模式匹配
-        for pattern, repl in self.base_patterns.items():
-            if re.match(pattern, name):
-                return re.sub(pattern, repl, name)
-        # 如果没有匹配到任何模式，返回原始名称（已清理干扰词）
-        return name
 
 # 归一化频道名称
 def channel_name_normalize(name):
-    classifier = ChannelNameClassifier()
-    return classifier.normalize(name)
+    for rep in ["高清", "超高", "HD", "标清", "频道", "-", " ", "PLUS", "＋", "(", ")"]:
+        name = name.replace(rep, "" if rep not in ["PLUS", "＋"] else "+")
+    name = re.sub(r"CCTV(\d+)台", r"CCTV\1", name)
+    name_map = {
+        "CCTV1综合": "CCTV1", "CCTV2财经": "CCTV2", "CCTV3综艺": "CCTV3",
+        "CCTV4国际": "CCTV4", "CCTV4中文国际": "CCTV4", "CCTV4欧洲": "CCTV4",
+        "CCTV5体育": "CCTV5", "CCTV6电影": "CCTV6", "CCTV7军事": "CCTV7",
+        "CCTV7军农": "CCTV7", "CCTV7农业": "CCTV7", "CCTV7国防军事": "CCTV7",
+        "CCTV8电视剧": "CCTV8", "CCTV9记录": "CCTV9", "CCTV9纪录": "CCTV9",
+        "CCTV10科教": "CCTV10", "CCTV11戏曲": "CCTV11", "CCTV12社会与法": "CCTV12",
+        "CCTV13新闻": "CCTV13", "CCTV新闻": "CCTV13", "CCTV14少儿": "CCTV14",
+        "CCTV15音乐": "CCTV15", "CCTV16奥林匹克": "CCTV16",
+        "CCTV17农业农村": "CCTV17", "CCTV17农业": "CCTV17",
+        "CCTV5+体育赛视": "CCTV5+", "CCTV5+体育赛事": "CCTV5+", "CCTV5+体育": "CCTV5+"
+    }
+    name = name_map.get(name, name)
+    return name
 
 # 获取频道名称中的数字
 def channel_key(channel_name):
@@ -97,12 +76,6 @@ def check_urls_concurrent(urls, timeout=1, print_valid=True):
                     print(result)
     return valid_urls
 
-# 替换为CDN地址
-def replace_with_cdn(url):
-    # 这里只是示例，实际需要根据具体的CDN服务进行替换
-    cdn_base = "https://cdn.example.com"
-    return url.replace("http://original-server.com", cdn_base)
-
 # jsmpeg模式获取频道
 def get_channels_alltv(csv_file):
     urls = set()
@@ -136,7 +109,6 @@ def get_channels_alltv(csv_file):
                 key = item.get('key', '').strip()
                 if name and key:
                     channel_url = f"{host}/hls/{key}/index.m3u8"
-                    channel_url = replace_with_cdn(channel_url)
                     channels.append((channel_name_normalize(name), channel_url))
         except Exception:
             continue
@@ -197,7 +169,6 @@ async def get_channels_newnew(csv_file):
                         if ',' in urlx:
                             urlx = "aaaaaaaa"
                         urld = urlx if 'http' in urlx else f"{url_x}{urlx}"
-                        urld = replace_with_cdn(urld)
                         if name and urlx:
                             channels.append((channel_name_normalize(name), urld))
                 return channels
@@ -253,7 +224,6 @@ def get_channels_hgxtv(csv_file):
                     urls_parts = channel_url.split('/', 3)
                     url_data_parts = url.split('/', 3)
                     urld = f"{urls_parts[0]}//{url_data_parts[2]}/{urls_parts[3]}" if len(urls_parts) >= 4 else f"{urls_parts[0]}//{url_data_parts[2]}"
-                    urld = replace_with_cdn(urld)
                     channels.append((channel_name_normalize(name), urld))
         except:
             continue
@@ -268,32 +238,23 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
     def worker():
         while True:
             channel_name, channel_url = task_queue.get()
-            total_speed = 0
-            valid_tests = 0
-            for _ in range(3):  # 进行3次测试
-                try:
-                    channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
-                    lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
-                    ts_lists = [line for line in lines if not line.startswith('#')]
-                    if not ts_lists:
-                        raise Exception("No valid TS files found.")
-                    ts_url = channel_url_t + ts_lists[0].split('/')[-1]
-                    start_time = os.times()[0]
-                    content = requests.get(ts_url, timeout=5).content
-                    end_time = os.times()[0]
-                    response_time = end_time - start_time
-                    if content:
-                        file_size = len(content)
-                        download_speed = file_size / response_time / 1024
-                        total_speed += download_speed
-                        valid_tests += 1
-                except:
-                    continue
-            if valid_tests > 0:
-                average_speed = total_speed / valid_tests
-                normalized_speed = min(max(average_speed / 1024, 0.001), 100)
-                speed_results.append((channel_name, channel_url, f"{normalized_speed:.3f} MB/s"))
-            else:
+            try:
+                channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
+                lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
+                ts_lists = [line for line in lines if not line.startswith('#')]
+                if not ts_lists:
+                    raise Exception("No valid TS files found.")
+                ts_url = channel_url_t + ts_lists[0].split('/')[-1]
+                start_time = os.times()[0]
+                content = requests.get(ts_url, timeout=5).content
+                end_time = os.times()[0]
+                response_time = end_time - start_time
+                if content:
+                    file_size = len(content)
+                    download_speed = file_size / response_time / 1024
+                    normalized_speed = min(max(download_speed / 1024, 0.001), 100)
+                    speed_results.append((channel_name, channel_url, f"{normalized_speed:.3f} MB/s"))
+            except:
                 error_channels.append((channel_name, channel_url))
             finally:
                 progress = (len(speed_results) + len(error_channels)) / len(channels) * 100
@@ -308,7 +269,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
         task_queue.put(channel)
     task_queue.join()
 
-    # 按速度排序并筛选每个频道最多10个源
+    # 按速度排序并筛选每个频道最多8个源
     from collections import defaultdict
     channel_sources = defaultdict(list)
     for channel_name, channel_url, speed in speed_results:
@@ -316,7 +277,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
 
     optimized_sources = []
     for channel_name, sources in channel_sources.items():
-        sorted_sources = sorted(sources, key=lambda x: float(x[1].split()[0]), reverse=True)[:10]  # 保留最多10个源
+        sorted_sources = sorted(sources, key=lambda x: float(x[1].split()[0]), reverse=True)[:8]
         for url, speed in sorted_sources:
             optimized_sources.append((channel_name, url, speed))
 
@@ -345,50 +306,22 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
         channel_counters = {}
         for result in results:
             channel_name, channel_url, _ = result
-            # 改进的分类规则
-            if genre == '央视频道' and 'CCTV' in channel_name:
-                pass
-            elif genre == '卫视频道' and any(keyword in channel_name for keyword in ['卫视', 'TV']):
-                pass
-            elif genre == '国际频道' and any(keyword in channel_name for keyword in ['BBC', 'CNN', 'NHK', 'FOX', 'DW', 'RT']):
-                pass
-            elif genre == '体育频道' and any(keyword in channel_name for keyword in ['体育', '足球', '篮球', 'F1', 'NBA', 'NHL', 'MLB']):
-                pass
-            elif genre == '电影频道' and any(keyword in channel_name for keyword in ['电影', 'MOVIE']):
-                pass
-            elif genre == '少儿频道' and any(keyword in channel_name for keyword in ['少儿', '动画', 'KIDS']):
-                pass
-            elif genre == '音乐频道' and any(keyword in channel_name for keyword in ['音乐', 'MTV']):
-                pass
-            elif genre == '其他频道':
-                if any(genre_key in channel_name for genre_key in ['央视频道', '卫视频道', '国际频道', '体育频道', '电影频道', '少儿频道', '音乐频道']):
-                    continue
-            else:
-                continue
-                
-            if channel_name in channel_counters:
-                if channel_counters[channel_name] < 10:  # 每个频道最多10个源
+            if genre == '央视频道' and 'CCTV' in channel_name or \
+                    genre == '卫视频道' and '卫视' in channel_name or \
+                    genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
+                if channel_name in channel_counters:
+                    if channel_counters[channel_name] < 8:
+                        file.write(f"{channel_name},{channel_url}\n")
+                        channel_counters[channel_name] += 1
+                else:
                     file.write(f"{channel_name},{channel_url}\n")
-                    channel_counters[channel_name] += 1
-            else:
-                file.write(f"{channel_name},{channel_url}\n")
-                channel_counters[channel_name] = 1
+                    channel_counters[channel_name] = 1
 
     with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as txt_file:
         txt_file.write('央视频道,#genre#\n')
         write_to_file(txt_file, unique_channels, '央视频道')
         txt_file.write('卫视频道,#genre#\n')
         write_to_file(txt_file, unique_channels, '卫视频道')
-        txt_file.write('国际频道,#genre#\n')
-        write_to_file(txt_file, unique_channels, '国际频道')
-        txt_file.write('体育频道,#genre#\n')
-        write_to_file(txt_file, unique_channels, '体育频道')
-        txt_file.write('电影频道,#genre#\n')
-        write_to_file(txt_file, unique_channels, '电影频道')
-        txt_file.write('少儿频道,#genre#\n')
-        write_to_file(txt_file, unique_channels, '少儿频道')
-        txt_file.write('音乐频道,#genre#\n')
-        write_to_file(txt_file, unique_channels, '音乐频道')
         txt_file.write('其他频道,#genre#\n')
         write_to_file(txt_file, unique_channels, '其他频道')
 
@@ -398,43 +331,20 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
             channel_counters = {}
             for result in results:
                 channel_name, channel_url, _ = result
-                # 改进的分类规则
-                if genre == '央视频道' and 'CCTV' in channel_name:
-                    pass
-                elif genre == '卫视频道' and any(keyword in channel_name for keyword in ['卫视', 'TV']):
-                    pass
-                elif genre == '国际频道' and any(keyword in channel_name for keyword in ['BBC', 'CNN', 'NHK', 'FOX', 'DW', 'RT']):
-                    pass
-                elif genre == '体育频道' and any(keyword in channel_name for keyword in ['体育', '足球', '篮球', 'F1', 'NBA', 'NHL', 'MLB']):
-                    pass
-                elif genre == '电影频道' and any(keyword in channel_name for keyword in ['电影', 'MOVIE']):
-                    pass
-                elif genre == '少儿频道' and any(keyword in channel_name for keyword in ['少儿', '动画', 'KIDS']):
-                    pass
-                elif genre == '音乐频道' and any(keyword in channel_name for keyword in ['音乐', 'MTV']):
-                    pass
-                elif genre == '其他频道':
-                    if any(genre_key in channel_name for genre_key in ['央视频道', '卫视频道', '国际频道', '体育频道', '电影频道', '少儿频道', '音乐频道']):
-                        continue
-                else:
-                    continue
-                    
-                if channel_name in channel_counters:
-                    if channel_counters[channel_name] < 10:  # 每个频道最多10个源
-                        file.write(f"#EXTINF:-1 tvg-name=\"{channel_name}\" group-title=\"{genre}\" tvg-logo=\"\",{channel_name}\n")
+                if genre == '央视频道' and 'CCTV' in channel_name or \
+                        genre == '卫视频道' and '卫视' in channel_name or \
+                        genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
+                    if channel_name in channel_counters:
+                        if channel_counters[channel_name] < 8:
+                            file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
+                            file.write(f"{channel_url}\n")
+                            channel_counters[channel_name] += 1
+                    else:
+                        file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
                         file.write(f"{channel_url}\n")
-                        channel_counters[channel_name] += 1
-                else:
-                    file.write(f"#EXTINF:-1 tvg-name=\"{channel_name}\" group-title=\"{genre}\" tvg-logo=\"\",{channel_name}\n")
-                    file.write(f"{channel_url}\n")
-                    channel_counters[channel_name] = 1
+                        channel_counters[channel_name] = 1
         write_to_m3u(m3u_file, unique_channels, '央视频道')
         write_to_m3u(m3u_file, unique_channels, '卫视频道')
-        write_to_m3u(m3u_file, unique_channels, '国际频道')
-        write_to_m3u(m3u_file, unique_channels, '体育频道')
-        write_to_m3u(m3u_file, unique_channels, '电影频道')
-        write_to_m3u(m3u_file, unique_channels, '少儿频道')
-        write_to_m3u(m3u_file, unique_channels, '音乐频道')
         write_to_m3u(m3u_file, unique_channels, '其他频道')
 
     with open("speed.txt", 'w', encoding='utf-8') as speed_file:
