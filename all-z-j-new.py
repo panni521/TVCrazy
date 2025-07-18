@@ -290,6 +290,18 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
             unique_channels.append((channel_name, channel_url, speed))
             seen.add(key)
 
+    # 对频道进行排序
+    def custom_sort_key(item):
+        name = item[0]
+        if name.startswith('CCTV'):
+            num = re.search(r'\d+', name)
+            if num:
+                return (0, int(num.group()))
+            return (0, float('inf'))
+        return (1, name)
+
+    unique_channels.sort(key=custom_sort_key)
+
     def write_to_file(file, results, genre):
         channel_counters = {}
         for result in results:
