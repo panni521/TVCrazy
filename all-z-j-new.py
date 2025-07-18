@@ -8,8 +8,16 @@ import os
 import threading
 from queue import Queue
 import argparse
-from collections import defaultdict
+from collections import defaultdict, Counter
 import time
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='iptv_generator.log'
+)
 
 class ChannelNameClassifier:
     def __init__(self):
@@ -56,7 +64,25 @@ def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
 def adjust_concurrency():
     return 100
 
-def validate_channel_url(url, retries=3, timeout=3):
+def validate_channel_data(name, url):
+    """验证频道名称和URL的基本有效性"""
+    if not name or not url:
+        logging.warning(f"无效数据: 名称={name}, URL={url}")
+        return False
+    
+    # 检查URL格式
+    if not re.match(r'^https?://', url):
+        logging.warning(f"无效URL格式: {url}")
+        return False
+    
+    # 检查名称是否包含非法字符
+    if any(char in name for char in ['\n', ',', '"']):
+        logging.warning(f"名称包含非法字符: {name}")
+        return False
+    
+    return True
+
+def validate_channel_url(url, retries=3, timeout=3, strict=False):
     """验证URL是否有效，尝试获取m3u8文件并解析TS片段"""
     for attempt in range(retries):
         try:
@@ -78,24 +104,31 @@ def validate_channel_url(url, retries=3, timeout=3):
             
             # 第三步：验证TS片段是否可访问
             base_url = url.rsplit('/', 1)[0] + '/'
-            ts_url = base_url + ts_lists[0].split('/')[-1]
+            # 测试前3个TS片段，提高准确性
+            valid_ts = 0
+            for ts_path in ts_lists[:3]:
+                ts_url = base_url + ts_path.split('/')[-1]
+                ts_response = requests.head(ts_url, timeout=timeout)
+                if ts_response.status_code == 200:
+                    valid_ts += 1
             
-            ts_response = requests.head(ts_url, timeout=timeout)
-            if ts_response.status_code == 200:
+            if valid_ts >= (2 if strict else 1):  # 严格模式需要更多验证
                 return True
                 
         except Exception as e:
-            print(f"验证失败 ({attempt+1}/{retries}): {url} - {str(e)}")
+            logging.debug(f"验证失败 ({attempt+1}/{retries}): {url} - {str(e)}")
             continue
     
+    logging.warning(f"URL验证失败: {url}")
     return False
 
-def check_urls_concurrent(urls, timeout=3, retries=3):
+def check_urls_concurrent(urls, timeout=3, retries=3, strict=False):
     valid_urls = []
     
     def check_url(url):
-        if validate_channel_url(url, retries, timeout):
+        if validate_channel_url(url, retries, timeout, strict):
             valid_urls.append(url)
+            logging.info(f"有效URL: {url}")
             print(f"有效URL: {url}")
             return True
         return False
@@ -109,7 +142,86 @@ def replace_with_cdn(url):
     cdn_base = "https://cdn.example.com"
     return url.replace("http://original-server.com", cdn_base)
 
-def get_channels_alltv(csv_file):
+def filter_channels(channels, min_speed=0.1):
+    """多级过滤：去除重复、无效和低质量的频道"""
+    # 第一级：基本格式验证
+    valid_channels = [
+        (name, url) 
+        for name, url in channels 
+        if validate_channel_data(name, url)
+    ]
+    
+    # 第二级：速度过滤（可选）
+    if min_speed > 0:
+        speed_results = test_speed(valid_channels)
+        valid_channels = [
+            (name, url) 
+            for name, url, speed in speed_results 
+            if float(speed.split()[0]) >= min_speed
+        ]
+    
+    # 第三级：去重（基于名称和URL的哈希）
+    unique_channels = []
+    seen = set()
+    for name, url in valid_channels:
+        key = hash(f"{name}_{url}")
+        if key not in seen:
+            unique_channels.append((name, url))
+            seen.add(key)
+    
+    return unique_channels
+
+def test_speed(channels, timeout=5):
+    """测试频道速度并返回有效结果"""
+    results = []
+    
+    for channel_name, channel_url in channels:
+        speeds = []
+        
+        try:
+            # 获取m3u8文件
+            response = requests.get(channel_url, timeout=timeout)
+            if response.status_code != 200:
+                raise Exception(f"HTTP状态码: {response.status_code}")
+            
+            lines = response.text.strip().split('\n')
+            ts_lists = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
+            
+            if not ts_lists:
+                raise Exception("未找到有效的TS片段")
+            
+            base_url = channel_url.rsplit('/', 1)[0] + '/'
+            
+            # 测试前3个TS片段
+            for ts_path in ts_lists[:3]:
+                ts_url = base_url + ts_path.split('/')[-1]
+                try:
+                    start_time = time.time()
+                    ts_response = requests.get(ts_url, timeout=timeout)
+                    end_time = time.time()
+                    
+                    if ts_response.status_code == 200 and len(ts_response.content) > 1024:
+                        download_speed = len(ts_response.content) / (end_time - start_time) / 1024 / 1024  # MB/s
+                        speeds.append(download_speed)
+                    else:
+                        raise Exception(f"TS下载失败: {ts_response.status_code}")
+                except Exception as e:
+                    logging.debug(f"TS测试失败: {ts_url} - {str(e)}")
+                    continue
+            
+            # 要求至少成功测试2个TS片段
+            if len(speeds) >= 2:
+                avg_speed = sum(speeds) / len(speeds)
+                results.append((channel_name, channel_url, f"{avg_speed:.3f} MB/s"))
+                logging.info(f"速度测试成功: {channel_name} - {avg_speed:.3f} MB/s")
+        
+        except Exception as e:
+            logging.warning(f"速度测试失败: {channel_url} - {str(e)}")
+            continue
+    
+    return results
+
+def get_channels_alltv(csv_file, strict=False):
     urls = set()
     with open(csv_file, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
@@ -129,7 +241,7 @@ def get_channels_alltv(csv_file):
         port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port))
 
-    valid_urls = check_urls_concurrent(set(ip_range_urls))
+    valid_urls = check_urls_concurrent(set(ip_range_urls), strict=strict)
     channels = []
     
     for url in valid_urls:
@@ -144,17 +256,17 @@ def get_channels_alltv(csv_file):
                     channel_url = f"{host}/hls/{key}/index.m3u8"
                     channel_url = replace_with_cdn(channel_url)
                     # 最终验证
-                    if validate_channel_url(channel_url):
+                    if validate_channel_data(name, channel_url) and validate_channel_url(channel_url, strict=strict):
                         channels.append((channel_name_normalize(name), channel_url))
                     else:
-                        print(f"无效频道URL: {channel_url}")
+                        logging.warning(f"无效频道URL: {channel_url}")
         except Exception as e:
-            print(f"获取频道列表失败: {json_url} - {str(e)}")
+            logging.error(f"获取频道列表失败: {json_url} - {str(e)}")
             continue
     
     return channels
 
-async def get_channels_newnew(csv_file):
+async def get_channels_newnew(csv_file, strict=False):
     with open(csv_file, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         urls = list(set(row.get('link', '').strip() for row in reader if row.get('link')))
@@ -213,16 +325,19 @@ async def get_channels_newnew(csv_file):
                         urld = replace_with_cdn(urld)
                         
                         # 实时验证
-                        if await validate_url_async(session, urld):
-                            channels.append((channel_name_normalize(name), urld))
+                        if await validate_url_async(session, urld, strict):
+                            if validate_channel_data(name, urld):
+                                channels.append((channel_name_normalize(name), urld))
+                            else:
+                                logging.warning(f"无效频道数据: 名称={name}, URL={urld}")
                         else:
-                            print(f"无效频道URL: {urld}")
+                            logging.warning(f"无效频道URL: {urld}")
                 return channels
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
-                print(f"获取JSON失败: {url} - {str(e)}")
+                logging.error(f"获取JSON失败: {url} - {str(e)}")
                 return []
 
-    async def validate_url_async(session, url):
+    async def validate_url_async(session, url, strict):
         try:
             async with session.get(url, timeout=3) as response:
                 if response.status != 200:
@@ -236,10 +351,15 @@ async def get_channels_newnew(csv_file):
                     return False
                     
                 base_url = url.rsplit('/', 1)[0] + '/'
-                ts_url = base_url + ts_lists[0].split('/')[-1]
+                # 测试前3个TS片段
+                valid_ts = 0
+                for ts_path in ts_lists[:3]:
+                    ts_url = base_url + ts_path.split('/')[-1]
+                    async with session.head(ts_url, timeout=3) as ts_response:
+                        if ts_response.status == 200:
+                            valid_ts += 1
                 
-                async with session.head(ts_url, timeout=3) as ts_response:
-                    return ts_response.status == 200
+                return valid_ts >= (2 if strict else 1)
         except:
             return False
 
@@ -257,6 +377,7 @@ async def get_channels_newnew(csv_file):
     
     async with aiohttp.ClientSession() as session:
         valid_urls = await check_urls(session, unique_urls, semaphore)
+        logging.info(f"找到 {len(valid_urls)} 个有效服务器")
         print(f"找到 {len(valid_urls)} 个有效服务器")
         
         tasks = []
@@ -266,7 +387,7 @@ async def get_channels_newnew(csv_file):
         results = await asyncio.gather(*tasks)
         return [channel for sublist in results for channel in sublist]
 
-def get_channels_hgxtv(csv_file):
+def get_channels_hgxtv(csv_file, strict=False):
     urls = set()
     with open(csv_file, 'r', encoding='utf-8-sig') as csvfile:
         reader = csv.DictReader(csvfile)
@@ -285,7 +406,7 @@ def get_channels_hgxtv(csv_file):
         port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, "/ZHGXTV/Public/json/live_interface.txt"))
 
-    valid_urls = check_urls_concurrent(set(ip_range_urls))
+    valid_urls = check_urls_concurrent(set(ip_range_urls), strict=strict)
     channels = []
     
     for url in valid_urls:
@@ -305,17 +426,17 @@ def get_channels_hgxtv(csv_file):
                     urld = replace_with_cdn(urld)
                     
                     # 最终验证
-                    if validate_channel_url(urld):
+                    if validate_channel_data(name, urld) and validate_channel_url(urld, strict=strict):
                         channels.append((channel_name_normalize(name), urld))
                     else:
-                        print(f"无效频道URL: {urld}")
+                        logging.warning(f"无效频道URL: {urld}")
         except Exception as e:
-            print(f"处理服务器失败: {url} - {str(e)}")
+            logging.error(f"处理服务器失败: {url} - {str(e)}")
             continue
     
     return channels
 
-def test_speed_and_output(channels, output_prefix="itvlist"):
+def test_speed_and_output(channels, output_prefix="itvlist", min_speed=0.1):
     task_queue = Queue()
     speed_results = []
     error_channels = []
@@ -328,7 +449,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
             
             try:
                 # 获取m3u8文件
-                response = requests.get(channel_url, timeout=3)
+                response = requests.get(channel_url, timeout=5)
                 if response.status_code != 200:
                     raise Exception(f"HTTP状态码: {response.status_code}")
                 
@@ -340,10 +461,9 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
                 
                 base_url = channel_url.rsplit('/', 1)[0] + '/'
                 
-                # 选择前3个TS片段进行速度测试
-                test_ts_urls = [base_url + ts.split('/')[-1] for ts in ts_lists[:3]]
-                
-                for ts_url in test_ts_urls:
+                # 测试前3个TS片段
+                for ts_path in ts_lists[:3]:
+                    ts_url = base_url + ts_path.split('/')[-1]
                     try:
                         start_time = time.time()
                         ts_response = requests.get(ts_url, timeout=5)
@@ -355,18 +475,22 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
                         else:
                             raise Exception(f"TS下载失败: {ts_response.status_code}")
                     except Exception as e:
-                        print(f"测试TS失败: {ts_url} - {str(e)}")
+                        logging.debug(f"TS测试失败: {ts_url} - {str(e)}")
                         continue
                 
-                if speeds:
+                if len(speeds) >= 2:  # 要求至少成功测试2个TS片段
                     average_speed = sum(speeds) / len(speeds)
-                    speed_results.append((channel_name, channel_url, f"{average_speed:.3f} MB/s"))
+                    if average_speed >= min_speed:  # 应用最小速度过滤
+                        speed_results.append((channel_name, channel_url, f"{average_speed:.3f} MB/s"))
+                        logging.info(f"速度测试成功: {channel_name} - {average_speed:.3f} MB/s")
+                    else:
+                        error_channels.append((channel_name, channel_url, f"速度低于阈值: {average_speed:.3f} MB/s"))
                 else:
-                    error_channels.append((channel_name, channel_url))
+                    error_channels.append((channel_name, channel_url, "测试的TS片段不足"))
                     
             except Exception as e:
-                error_channels.append((channel_name, channel_url))
-                print(f"速度测试失败: {channel_url} - {str(e)}")
+                error_channels.append((channel_name, channel_url, str(e)))
+                logging.warning(f"速度测试失败: {channel_url} - {str(e)}")
             
             finally:
                 completed = len(speed_results) + len(error_channels)
@@ -431,12 +555,16 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
     }
 
     def write_to_file(file, results, genre):
-        channel_counters = defaultdict(int)
+        """写入文件前进行最终验证"""
+        channel_count = 0
         for channel_name, channel_url, _ in results:
             if genre_rules[genre](channel_name):
-                if channel_counters[channel_name] < 10:
+                if validate_channel_data(channel_name, channel_url):
                     file.write(f"{channel_name},{channel_url}\n")
-                    channel_counters[channel_name] += 1
+                    channel_count += 1
+                else:
+                    logging.warning(f"写入时跳过无效频道: {channel_name} - {channel_url}")
+        return channel_count
 
     # 创建输出目录
     output_dir = os.path.dirname(output_prefix)
@@ -444,10 +572,13 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
         os.makedirs(output_dir)
 
     # 写入TXT文件
+    total_written = 0
     with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as txt_file:
         for genre in ['央视频道', '卫视频道', '国际频道', '体育频道', '电影频道', '少儿频道', '音乐频道', '其他频道']:
             txt_file.write(f'{genre},#genre#\n')
-            write_to_file(txt_file, unique_channels, genre)
+            count = write_to_file(txt_file, unique_channels, genre)
+            total_written += count
+            logging.info(f"写入 {genre}: {count} 个频道")
 
     # 写入M3U文件
     with open(f"{output_prefix}.m3u", 'w', encoding='utf-8') as m3u_file:
@@ -455,7 +586,7 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
         for genre in ['央视频道', '卫视频道', '国际频道', '体育频道', '电影频道', '少儿频道', '音乐频道', '其他频道']:
             for channel_name, channel_url, speed in unique_channels:
                 if genre_rules[genre](channel_name):
-                    m3u_file.write(f"#EXTINF:-1 tvg-name=\"{channel_name}\" group-title=\"{genre}\" tvg-logo=\"\",{channel_name}\n")
+                    m3u_file.write(f"#EXTINF:-1 tvg-name=\"{channel_name}\" group-title=\"{genre}\" tvg-logo=\"\" catchup=\"default\" catchup-days=\"7\",{channel_name}\n")
                     m3u_file.write(f"{channel_url}\n")
 
     # 写入速度文件
@@ -465,19 +596,37 @@ def test_speed_and_output(channels, output_prefix="itvlist"):
 
     # 写入无效频道日志
     with open(f"{output_prefix}_invalid.log", 'w', encoding='utf-8') as log_file:
-        for channel_name, channel_url in error_channels:
-            log_file.write(f"{channel_name},{channel_url}\n")
+        for channel_name, channel_url, reason in error_channels:
+            log_file.write(f"{channel_name},{channel_url},{reason}\n")
 
+    # 生成统计报告
+    channel_counter = Counter([genre for name, _, _ in unique_channels for genre, rule in genre_rules.items() if rule(name)])
+    
     print(f"\n处理完成:")
     print(f"- 总输入频道: {total_channels}")
     print(f"- 有效频道: {len(speed_results)}")
-    print(f"- 无效频道: {len(error_channels)}")
+    print(f"- 因速度过滤的频道: {len([1 for _, _, reason in error_channels if '速度低于阈值' in reason])}")
     print(f"- 最终输出频道: {len(unique_channels)}")
+    print(f"\n频道分类统计:")
+    for genre, count in channel_counter.items():
+        print(f"- {genre}: {count}")
+    
     print(f"\n结果已保存到:")
     print(f"- {output_prefix}.txt")
     print(f"- {output_prefix}.m3u")
     print(f"- {output_prefix}_speed.txt (包含速度信息)")
     print(f"- {output_prefix}_invalid.log (无效频道日志)")
+    print(f"- iptv_generator.log (详细日志)")
+    
+    # 检查是否生成了空文件
+    if total_written == 0:
+        print("警告：没有有效频道被写入文件！")
+        # 可选：删除空文件
+        for ext in ['.txt', '.m3u', '_speed.txt']:
+            file_path = f"{output_prefix}{ext}"
+            if os.path.exists(file_path) and os.path.getsize(file_path) == 0:
+                os.remove(file_path)
+                print(f"已删除空文件: {file_path}")
 
 def main():
     parser = argparse.ArgumentParser(description='IPTV频道批量探测与测速工具')
@@ -487,6 +636,8 @@ def main():
     parser.add_argument('--output', default='output/itvlist', help='输出文件前缀')
     parser.add_argument('--timeout', type=int, default=3, help='请求超时时间(秒)')
     parser.add_argument('--retries', type=int, default=3, help='重试次数')
+    parser.add_argument('--min-speed', type=float, default=0.1, help='最小有效速度 (MB/s)')
+    parser.add_argument('--strict', action='store_true', help='启用严格验证模式')
     args = parser.parse_args()
 
     # 检查至少指定了一个CSV文件
@@ -497,26 +648,33 @@ def main():
     print(f"开始处理IPTV频道...")
     print(f"- 超时设置: {args.timeout}秒")
     print(f"- 重试次数: {args.retries}次")
+    print(f"- 最小速度: {args.min_speed} MB/s")
+    print(f"- 严格验证: {'启用' if args.strict else '禁用'}")
+    
+    logging.info(f"程序启动，参数: {args}")
 
     # 获取所有频道
     channels = []
     if args.jsmpeg:
         print(f"\n正在处理JSMPEG模式: {args.jsmpeg}")
-        jsmpeg_channels = get_channels_alltv(args.jsmpeg)
+        jsmpeg_channels = get_channels_alltv(args.jsmpeg, args.strict)
         channels.extend(jsmpeg_channels)
         print(f"JSMPEG模式获取到 {len(jsmpeg_channels)} 个有效频道")
+        logging.info(f"JSMPEG模式获取到 {len(jsmpeg_channels)} 个有效频道")
 
     if args.zhgxtv:
         print(f"\n正在处理ZHGXT模式: {args.zhgxtv}")
-        zhgxtv_channels = get_channels_hgxtv(args.zhgxtv)
+        zhgxtv_channels = get_channels_hgxtv(args.zhgxtv, args.strict)
         channels.extend(zhgxtv_channels)
         print(f"ZHGXT模式获取到 {len(zhgxtv_channels)} 个有效频道")
+        logging.info(f"ZHGXT模式获取到 {len(zhgxtv_channels)} 个有效频道")
 
     if args.txiptv:
         print(f"\n正在处理TXIPTV模式: {args.txiptv}")
-        txiptv_channels = asyncio.run(get_channels_newnew(args.txiptv))
+        txiptv_channels = asyncio.run(get_channels_newnew(args.txiptv, args.strict))
         channels.extend(txiptv_channels)
         print(f"TXIPTV模式获取到 {len(txiptv_channels)} 个有效频道")
+        logging.info(f"TXIPTV模式获取到 {len(txiptv_channels)} 个有效频道")
 
     # 去重
     unique_channels = []
@@ -527,12 +685,26 @@ def main():
             unique_channels.append(channel)
             seen.add(key)
 
-    print(f"\n总共有 {len(unique_channels)} 个唯一频道需要测试")
+    print(f"\n总共有 {len(unique_channels)} 个唯一频道需要过滤")
+    logging.info(f"总共有 {len(unique_channels)} 个唯一频道需要过滤")
     
-    if unique_channels:
-        test_speed_and_output(unique_channels, args.output)
-    else:
-        print("没有找到有效的频道源")
+    if not unique_channels:
+        print("错误：没有找到有效的频道源，程序退出。")
+        logging.error("没有找到有效的频道源")
+        return
+    
+    # 多级过滤
+    filtered_channels = filter_channels(unique_channels, args.min_speed)
+    print(f"过滤后剩余 {len(filtered_channels)} 个有效频道")
+    logging.info(f"过滤后剩余 {len(filtered_channels)} 个有效频道")
+    
+    if not filtered_channels:
+        print("错误：所有频道都被过滤，程序退出。")
+        logging.error("所有频道都被过滤")
+        return
+    
+    # 速度测试并输出
+    test_speed_and_output(filtered_channels, args.output, args.min_speed)
 
 if __name__ == "__main__":
     main()
