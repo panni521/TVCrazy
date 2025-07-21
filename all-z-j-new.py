@@ -8,52 +8,35 @@ import os
 import threading
 from queue import Queue
 import argparse
-from collections import defaultdict, Counter
-import time
-import logging
 
-# 配置日志
-logging.basicConfig(
-    level=logging.DEBUG,  # 修改为 DEBUG 级别以输出更多信息
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='iptv_generator.log'
-)
-
-class ChannelNameClassifier:
-    def __init__(self):
-        self.base_patterns = {
-            r'^CCTV\s*(\d+)\s*[+＋]?': r'CCTV\1+',
-            r'^CCTV\s*(\d+)': r'CCTV\1',
-            r'^(\w+卫视)': r'\1',
-            r'^(\w+新闻)': r'\1',
-            r'^(\w+电影)': r'\1',
-            r'^(\w+体育)': r'\1',
-            r'^(\w+少儿)': r'\1',
-            r'^(\w+音乐)': r'\1',
-        }
-        self.interference_words = [
-            "高清", "超清", "标清", "HD", "SD", "4K", "测试", "TV", "频道", 
-            "卫视", "中央", "电视台", "中国", "网络", "直播", "官网",
-            "官方", "CN", "China", "Plus", "＋", "+", "(", ")", "【", "】",
-            "-", "_", " ", "/"
-        ]
-    
-    def normalize(self, name):
-        for word in self.interference_words:
-            name = name.replace(word, "")
-        name = name.upper()
-        for pattern, repl in self.base_patterns.items():
-            if re.match(pattern, name):
-                return re.sub(pattern, repl, name)
-        return name
-
+# 归一化频道名称
 def channel_name_normalize(name):
-    return ChannelNameClassifier().normalize(name)
+    for rep in ["高清", "超高", "HD", "标清", "频道", "-", " ", "PLUS", "＋", "(", ")"]:
+        name = name.replace(rep, "" if rep not in ["PLUS", "＋"] else "+")
+    name = re.sub(r"CCTV(\d+)台", r"CCTV\1", name)
+    name_map = {
+        "CCTV1综合": "CCTV1", "CCTV2财经": "CCTV2", "CCTV3综艺": "CCTV3",
+        "CCTV4国际": "CCTV4", "CCTV4中文国际": "CCTV4", "CCTV4欧洲": "CCTV4",
+        "CCTV5体育": "CCTV5", "CCTV6电影": "CCTV6", "CCTV7军事": "CCTV7",
+        "CCTV7军农": "CCTV7", "CCTV7农业": "CCTV7", "CCTV7国防军事": "CCTV7",
+        "CCTV8电视剧": "CCTV8", "CCTV9记录": "CCTV9", "CCTV9纪录": "CCTV9",
+        "CCTV10科教": "CCTV10", "CCTV11戏曲": "CCTV11", "CCTV12社会与法": "CCTV12",
+        "CCTV13新闻": "CCTV13", "CCTV新闻": "CCTV13", "CCTV14少儿": "CCTV14",
+        "CCTV15音乐": "CCTV15", "CCTV16奥林匹克": "CCTV16",
+        "CCTV17农业农村": "CCTV17", "CCTV17农业": "CCTV17",
+        "CCTV5+体育赛视": "CCTV5+", "CCTV5+体育赛事": "CCTV5+", "CCTV5+体育": "CCTV5+"
+    }
+    name = name_map.get(name, name)
+    return name
 
+# 获取频道名称中的数字
 def channel_key(channel_name):
     match = re.search(r'\d+', channel_name)
-    return int(match.group()) if match else float('inf')
+    if match:
+        return int(match.group())
+    return float('inf')
 
+# 生成同一C段的所有IP的URL
 def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
     ip_parts = ip_address.split('.')
     if len(ip_parts) < 3:
@@ -61,167 +44,40 @@ def generate_ip_range_urls(base_url, ip_address, port, suffix=None):
     c_prefix = '.'.join(ip_parts[:3])
     return [f"{base_url}{c_prefix}.{i}{port}{suffix if suffix else ''}" for i in range(1, 256)]
 
+# 固定并发数，移除对psutil的依赖
 def adjust_concurrency():
-    return 100
+    return 100  # 使用固定的默认并发数
 
-def validate_channel_data(name, url):
-    """验证频道名称和URL的基本有效性"""
-    if not name or not url:
-        logging.warning(f"无效数据: 名称={name}, URL={url}")
-        return False
-    
-    # 检查URL格式
-    if not re.match(r'^https?://', url):
-        logging.warning(f"无效URL格式: {url}")
-        return False
-    
-    # 检查名称是否包含非法字符
-    if any(char in name for char in ['\n', ',', '"']):
-        logging.warning(f"名称包含非法字符: {name}")
-        return False
-    
-    return True
-
-def validate_channel_url(url, retries=3, timeout=3, strict=False):
-    """验证URL是否有效，尝试获取m3u8文件并解析TS片段"""
-    for attempt in range(retries):
+# 增加超时重试机制
+def is_url_accessible(url, retries=3):
+    for _ in range(retries):
         try:
-            # 第一步：检查m3u8文件是否可访问
-            response = requests.get(url, timeout=timeout)
-            if response.status_code != 200:
-                raise Exception(f"HTTP状态码: {response.status_code}")
-            
-            content_type = response.headers.get('Content-Type', '')
-            if 'text' not in content_type and 'mpegurl' not in content_type:
-                raise Exception(f"无效内容类型: {content_type}")
-            
-            # 第二步：解析m3u8文件，查找TS片段
-            lines = response.text.strip().split('\n')
-            ts_lists = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
-            
-            if not ts_lists:
-                raise Exception("未找到有效的TS或m3u8片段")
-            
-            # 第三步：验证TS片段是否可访问
-            base_url = url.rsplit('/', 1)[0] + '/'
-            # 测试前3个TS片段，提高准确性
-            valid_ts = 0
-            for ts_path in ts_lists[:3]:
-                ts_url = base_url + ts_path.split('/')[-1]
-                ts_response = requests.head(ts_url, timeout=timeout)
-                if ts_response.status_code == 200:
-                    valid_ts += 1
-            
-            if valid_ts >= (2 if strict else 1):  # 严格模式需要更多验证
-                return True
-                
-        except Exception as e:
-            logging.debug(f"验证失败 ({attempt+1}/{retries}): {url} - {str(e)}")
+            response = requests.get(url, timeout=1)
+            return url if response.status_code == 200 else None
+        except requests.RequestException:
             continue
-    
-    logging.warning(f"URL验证失败: {url}")
-    return False
+    return None
 
-def check_urls_concurrent(urls, timeout=3, retries=3, strict=False):
-    valid_urls = []
-    
+# 并发检测URL可用性
+def check_urls_concurrent(urls, timeout=1, print_valid=True):
+    max_workers = adjust_concurrency()
+
     def check_url(url):
-        if validate_channel_url(url, retries, timeout, strict):
-            valid_urls.append(url)
-            logging.info(f"有效URL: {url}")
-            print(f"有效URL: {url}")
-            return True
-        return False
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=adjust_concurrency()) as executor:
-        list(executor.map(check_url, urls))
-    
+        return is_url_accessible(url)
+
+    valid_urls = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(check_url, url) for url in urls]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                valid_urls.append(result)
+                if print_valid:
+                    print(result)
     return valid_urls
 
-def replace_with_cdn(url):
-    cdn_base = "https://cdn.example.com"
-    return url.replace("http://original-server.com", cdn_base)
-
-def filter_channels(channels, min_speed=0.1):
-    """多级过滤：去除重复、无效和低质量的频道"""
-    # 第一级：基本格式验证
-    valid_channels = [
-        (name, url) 
-        for name, url in channels 
-        if validate_channel_data(name, url)
-    ]
-    
-    # 第二级：速度过滤（可选）
-    if min_speed > 0:
-        speed_results = test_speed(valid_channels)
-        valid_channels = [
-            (name, url) 
-            for name, url, speed in speed_results 
-            if float(speed.split()[0]) >= min_speed
-        ]
-    
-    # 第三级：去重（基于名称和URL的哈希）
-    unique_channels = []
-    seen = set()
-    for name, url in valid_channels:
-        key = hash(f"{name}_{url}")
-        if key not in seen:
-            unique_channels.append((name, url))
-            seen.add(key)
-    
-    return unique_channels
-
-def test_speed(channels, timeout=5):
-    """测试频道速度并返回有效结果"""
-    results = []
-    
-    for channel_name, channel_url in channels:
-        speeds = []
-        
-        try:
-            # 获取m3u8文件
-            response = requests.get(channel_url, timeout=timeout)
-            if response.status_code != 200:
-                raise Exception(f"HTTP状态码: {response.status_code}")
-            
-            lines = response.text.strip().split('\n')
-            ts_lists = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
-            
-            if not ts_lists:
-                raise Exception("未找到有效的TS片段")
-            
-            base_url = channel_url.rsplit('/', 1)[0] + '/'
-            
-            # 测试前3个TS片段
-            for ts_path in ts_lists[:3]:
-                ts_url = base_url + ts_path.split('/')[-1]
-                try:
-                    start_time = time.time()
-                    ts_response = requests.get(ts_url, timeout=timeout)
-                    end_time = time.time()
-                    
-                    if ts_response.status_code == 200 and len(ts_response.content) > 1024:
-                        download_speed = len(ts_response.content) / (end_time - start_time) / 1024 / 1024  # MB/s
-                        speeds.append(download_speed)
-                    else:
-                        raise Exception(f"TS下载失败: {ts_response.status_code}")
-                except Exception as e:
-                    logging.debug(f"TS测试失败: {ts_url} - {str(e)}")
-                    continue
-            
-            # 要求至少成功测试2个TS片段
-            if len(speeds) >= 2:
-                avg_speed = sum(speeds) / len(speeds)
-                results.append((channel_name, channel_url, f"{avg_speed:.3f} MB/s"))
-                logging.info(f"速度测试成功: {channel_name} - {avg_speed:.3f} MB/s")
-        
-        except Exception as e:
-            logging.warning(f"速度测试失败: {channel_url} - {str(e)}")
-            continue
-    
-    return results
-
-def get_channels_alltv(csv_file, strict=False):
+# jsmpeg模式获取频道
+def get_channels_alltv(csv_file):
     urls = set()
     with open(csv_file, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
@@ -241,33 +97,25 @@ def get_channels_alltv(csv_file, strict=False):
         port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port))
 
-    logging.info(f"JSMPEG模式生成 {len(ip_range_urls)} 个URL进行验证")
-    valid_urls = check_urls_concurrent(set(ip_range_urls), strict=strict)
+    valid_urls = check_urls_concurrent(set(ip_range_urls))
     channels = []
-    
     for url in valid_urls:
         json_url = f"{url.rstrip('/')}/streamer/list"
         try:
-            json_data = requests.get(json_url, timeout=3).json()
+            json_data = requests.get(json_url, timeout=1).json()
             host = url.rstrip('/')
             for item in json_data:
                 name = item.get('name', '').strip()
                 key = item.get('key', '').strip()
                 if name and key:
                     channel_url = f"{host}/hls/{key}/index.m3u8"
-                    channel_url = replace_with_cdn(channel_url)
-                    # 最终验证
-                    if validate_channel_data(name, channel_url) and validate_channel_url(channel_url, strict=strict):
-                        channels.append((channel_name_normalize(name), channel_url))
-                    else:
-                        logging.warning(f"无效频道URL: {channel_url}")
-        except Exception as e:
-            logging.error(f"获取频道列表失败: {json_url} - {str(e)}")
+                    channels.append((channel_name_normalize(name), channel_url))
+        except Exception:
             continue
-    
     return channels
 
-async def get_channels_newnew(csv_file, strict=False):
+# txiptv模式获取频道（异步）
+async def get_channels_newnew(csv_file):
     with open(csv_file, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         urls = list(set(row.get('link', '').strip() for row in reader if row.get('link')))
@@ -288,7 +136,7 @@ async def get_channels_newnew(csv_file, strict=False):
     async def is_url_accessible(session, url, semaphore):
         async with semaphore:
             try:
-                async with session.get(url, timeout=3) as response:
+                async with session.get(url, timeout=1) as response:
                     return url if response.status == 200 else None
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 return None
@@ -297,10 +145,12 @@ async def get_channels_newnew(csv_file, strict=False):
         tasks = []
         for url in urls:
             modified_urls = await modify_urls(url)
-            logging.info(f"TXIPTV模式为 {url} 生成 {len(modified_urls)} 个URL进行验证")
             tasks.extend(asyncio.create_task(is_url_accessible(session, modified_url, semaphore)) for modified_url in modified_urls)
         results = await asyncio.gather(*tasks)
-        return [result for result in results if result]
+        valid_urls = [result for result in results if result]
+        for url in valid_urls:
+            print(url)
+        return valid_urls
 
     async def fetch_json(session, url, semaphore):
         async with semaphore:
@@ -310,60 +160,20 @@ async def get_channels_newnew(csv_file, strict=False):
                 base_url = url[:ip_start]
                 ip_address = url[ip_start:ip_index]
                 url_x = f"{base_url}{ip_address}"
-                json_data = await session.get(url, timeout=3).json()
+                json_data = await session.get(url, timeout=1).json()
                 channels = []
-                
                 for item in json_data.get('data', []):
                     if isinstance(item, dict):
                         name = item.get('name')
                         urlx = item.get('url')
-                        if not name or not urlx:
-                            continue
-                            
                         if ',' in urlx:
-                            urlx = urlx.split(',')[0]  # 尝试使用第一个URL
-                            
+                            urlx = "aaaaaaaa"
                         urld = urlx if 'http' in urlx else f"{url_x}{urlx}"
-                        urld = replace_with_cdn(urld)
-                        
-                        # 实时验证
-                        if await validate_url_async(session, urld, strict):
-                            if validate_channel_data(name, urld):
-                                channels.append((channel_name_normalize(name), urld))
-                            else:
-                                logging.warning(f"无效频道数据: 名称={name}, URL={urld}")
-                        else:
-                            logging.warning(f"无效频道URL: {urld}")
+                        if name and urlx:
+                            channels.append((channel_name_normalize(name), urld))
                 return channels
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
-                logging.error(f"获取JSON失败: {url} - {str(e)}")
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
                 return []
-
-    async def validate_url_async(session, url, strict):
-        try:
-            async with session.get(url, timeout=3) as response:
-                if response.status != 200:
-                    return False
-                
-                content = await response.text()
-                lines = content.strip().split('\n')
-                ts_lists = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
-                
-                if not ts_lists:
-                    return False
-                    
-                base_url = url.rsplit('/', 1)[0] + '/'
-                # 测试前3个TS片段
-                valid_ts = 0
-                for ts_path in ts_lists[:3]:
-                    ts_url = base_url + ts_path.split('/')[-1]
-                    async with session.head(ts_url, timeout=3) as ts_response:
-                        if ts_response.status == 200:
-                            valid_ts += 1
-                
-                return valid_ts >= (2 if strict else 1)
-        except:
-            return False
 
     x_urls = []
     for url in urls:
@@ -376,20 +186,14 @@ async def get_channels_newnew(csv_file, strict=False):
 
     unique_urls = set(x_urls)
     semaphore = asyncio.Semaphore(500)
-    
     async with aiohttp.ClientSession() as session:
         valid_urls = await check_urls(session, unique_urls, semaphore)
-        logging.info(f"找到 {len(valid_urls)} 个有效服务器")
-        print(f"找到 {len(valid_urls)} 个有效服务器")
-        
-        tasks = []
-        for url in valid_urls:
-            tasks.append(asyncio.create_task(fetch_json(session, url, semaphore)))
-        
+        tasks = [asyncio.create_task(fetch_json(session, url, semaphore)) for url in valid_urls]
         results = await asyncio.gather(*tasks)
         return [channel for sublist in results for channel in sublist]
 
-def get_channels_hgxtv(csv_file, strict=False):
+# zhgxtv模式获取频道
+def get_channels_hgxtv(csv_file):
     urls = set()
     with open(csv_file, 'r', encoding='utf-8-sig') as csvfile:
         reader = csv.DictReader(csvfile)
@@ -408,119 +212,72 @@ def get_channels_hgxtv(csv_file, strict=False):
         port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, "/ZHGXTV/Public/json/live_interface.txt"))
 
-    logging.info(f"ZHGXT模式生成 {len(ip_range_urls)} 个URL进行验证")
-    valid_urls = check_urls_concurrent(set(ip_range_urls), strict=strict)
+    valid_urls = check_urls_concurrent(set(ip_range_urls))
     channels = []
-    
     for url in valid_urls:
         try:
-            json_data = requests.get(url, timeout=3).content.decode('utf-8')
+            json_data = requests.get(url, timeout=1).content.decode('utf-8')
             for line in json_data.split('\n'):
                 line = line.strip()
                 if line:
-                    try:
-                        name, channel_url = line.split(',')
-                    except ValueError:
-                        continue
-                        
+                    name, channel_url = line.split(',')
                     urls_parts = channel_url.split('/', 3)
                     url_data_parts = url.split('/', 3)
                     urld = f"{urls_parts[0]}//{url_data_parts[2]}/{urls_parts[3]}" if len(urls_parts) >= 4 else f"{urls_parts[0]}//{url_data_parts[2]}"
-                    urld = replace_with_cdn(urld)
-                    
-                    # 最终验证
-                    if validate_channel_data(name, urld) and validate_channel_url(urld, strict=strict):
-                        channels.append((channel_name_normalize(name), urld))
-                    else:
-                        logging.warning(f"无效频道URL: {urld}")
-        except Exception as e:
-            logging.error(f"处理服务器失败: {url} - {str(e)}")
+                    channels.append((channel_name_normalize(name), urld))
+        except:
             continue
-    
     return channels
 
-def test_speed_and_output(channels, output_prefix="itvlist", min_speed=0.1):
+# 测试频道速度并输出结果
+def test_speed_and_output(channels, output_prefix="itvlist"):
     task_queue = Queue()
     speed_results = []
     error_channels = []
-    total_channels = len(channels)
 
     def worker():
         while True:
             channel_name, channel_url = task_queue.get()
-            speeds = []
-            
             try:
-                # 获取m3u8文件
-                response = requests.get(channel_url, timeout=5)
-                if response.status_code != 200:
-                    raise Exception(f"HTTP状态码: {response.status_code}")
-                
-                lines = response.text.strip().split('\n')
-                ts_lists = [line for line in lines if not line.startswith('#') and line.endswith(('.ts', '.m3u8'))]
-                
+                channel_url_t = channel_url.rstrip(channel_url.split('/')[-1])
+                lines = requests.get(channel_url, timeout=1).text.strip().split('\n')
+                ts_lists = [line for line in lines if not line.startswith('#')]
                 if not ts_lists:
-                    raise Exception("未找到有效的TS片段")
-                
-                base_url = channel_url.rsplit('/', 1)[0] + '/'
-                
-                # 测试前3个TS片段
-                for ts_path in ts_lists[:3]:
-                    ts_url = base_url + ts_path.split('/')[-1]
-                    try:
-                        start_time = time.time()
-                        ts_response = requests.get(ts_url, timeout=5)
-                        end_time = time.time()
-                        
-                        if ts_response.status_code == 200 and len(ts_response.content) > 1024:
-                            download_speed = len(ts_response.content) / (end_time - start_time) / 1024 / 1024  # MB/s
-                            speeds.append(download_speed)
-                        else:
-                            raise Exception(f"TS下载失败: {ts_response.status_code}")
-                    except Exception as e:
-                        logging.debug(f"TS测试失败: {ts_url} - {str(e)}")
-                        continue
-                
-                if len(speeds) >= 2:  # 要求至少成功测试2个TS片段
-                    average_speed = sum(speeds) / len(speeds)
-                    if average_speed >= min_speed:  # 应用最小速度过滤
-                        speed_results.append((channel_name, channel_url, f"{average_speed:.3f} MB/s"))
-                        logging.info(f"速度测试成功: {channel_name} - {average_speed:.3f} MB/s")
-                    else:
-                        error_channels.append((channel_name, channel_url, f"速度低于阈值: {average_speed:.3f} MB/s"))
-                else:
-                    error_channels.append((channel_name, channel_url, "测试的TS片段不足"))
-                    
-            except Exception as e:
-                error_channels.append((channel_name, channel_url, str(e)))
-                logging.warning(f"速度测试失败: {channel_url} - {str(e)}")
-            
+                    raise Exception("No valid TS files found.")
+                ts_url = channel_url_t + ts_lists[0].split('/')[-1]
+                start_time = os.times()[0]
+                content = requests.get(ts_url, timeout=5).content
+                end_time = os.times()[0]
+                response_time = end_time - start_time
+                if content:
+                    file_size = len(content)
+                    download_speed = file_size / response_time / 1024
+                    normalized_speed = min(max(download_speed / 1024, 0.001), 100)
+                    speed_results.append((channel_name, channel_url, f"{normalized_speed:.3f} MB/s"))
+            except:
+                error_channels.append((channel_name, channel_url))
             finally:
-                completed = len(speed_results) + len(error_channels)
-                progress = completed / total_channels * 100
-                print(f"进度: {completed}/{total_channels} ({progress:.2f}%) | 有效: {len(speed_results)} | 无效: {len(error_channels)}")
+                progress = (len(speed_results) + len(error_channels)) / len(channels) * 100
+                print(f"可用频道：{len(speed_results)} 个 , 不可用频道：{len(error_channels)} 个 , 总频道：{len(channels)} 个 ,总进度：{progress:.2f} %。")
                 task_queue.task_done()
 
-    # 启动工作线程
-    num_threads = min(50, total_channels)
+    num_threads = 50
     for _ in range(num_threads):
         threading.Thread(target=worker, daemon=True).start()
 
-    # 添加所有频道到任务队列
     for channel in channels:
         task_queue.put(channel)
-    
-    # 等待所有任务完成
     task_queue.join()
 
-    # 按速度排序并筛选每个频道最多10个源
+    # 按速度排序并筛选每个频道最多8个源
+    from collections import defaultdict
     channel_sources = defaultdict(list)
     for channel_name, channel_url, speed in speed_results:
         channel_sources[channel_name].append((channel_url, speed))
 
     optimized_sources = []
     for channel_name, sources in channel_sources.items():
-        sorted_sources = sorted(sources, key=lambda x: float(x[1].split()[0]), reverse=True)[:10]
+        sorted_sources = sorted(sources, key=lambda x: float(x[1].split()[0]), reverse=True)[:8]
         for url, speed in sorted_sources:
             optimized_sources.append((channel_name, url, speed))
 
@@ -545,169 +302,77 @@ def test_speed_and_output(channels, output_prefix="itvlist", min_speed=0.1):
 
     unique_channels.sort(key=custom_sort_key)
 
-    # 分类规则
-    genre_rules = {
-        '央视频道': lambda name: 'CCTV' in name,
-        '卫视频道': lambda name: any(keyword in name for keyword in ['卫视', 'TV']),
-        '国际频道': lambda name: any(keyword in name for keyword in ['BBC', 'CNN', 'NHK', 'FOX', 'DW', 'RT']),
-        '体育频道': lambda name: any(keyword in name for keyword in ['体育', '足球', '篮球', 'F1', 'NBA', 'NHL', 'MLB']),
-        '电影频道': lambda name: any(keyword in name for keyword in ['电影', 'MOVIE']),
-        '少儿频道': lambda name: any(keyword in name for keyword in ['少儿', '动画', 'KIDS']),
-        '音乐频道': lambda name: any(keyword in name for keyword in ['音乐', 'MTV']),
-        '其他频道': lambda name: not any(rule(name) for rule in genre_rules.values())
-    }
-
     def write_to_file(file, results, genre):
-        """写入文件前进行最终验证"""
-        channel_count = 0
-        for channel_name, channel_url, _ in results:
-            if genre_rules[genre](channel_name):
-                if validate_channel_data(channel_name, channel_url):
-                    file.write(f"{channel_name},{channel_url}\n")
-                    channel_count += 1
+        channel_counters = {}
+        for result in results:
+            channel_name, channel_url, _ = result
+            if genre == '央视频道' and 'CCTV' in channel_name or \
+                    genre == '卫视频道' and '卫视' in channel_name or \
+                    genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
+                if channel_name in channel_counters:
+                    if channel_counters[channel_name] < 8:
+                        file.write(f"{channel_name},{channel_url}\n")
+                        channel_counters[channel_name] += 1
                 else:
-                    logging.warning(f"写入时跳过无效频道: {channel_name} - {channel_url}")
-        return channel_count
+                    file.write(f"{channel_name},{channel_url}\n")
+                    channel_counters[channel_name] = 1
 
-    # 创建输出目录
-    output_dir = os.path.dirname(output_prefix)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # 写入TXT文件
-    total_written = 0
     with open(f"{output_prefix}.txt", 'w', encoding='utf-8') as txt_file:
-        for genre in ['央视频道', '卫视频道', '国际频道', '体育频道', '电影频道', '少儿频道', '音乐频道', '其他频道']:
-            txt_file.write(f'{genre},#genre#\n')
-            count = write_to_file(txt_file, unique_channels, genre)
-            total_written += count
-            logging.info(f"写入 {genre}: {count} 个频道")
+        txt_file.write('央视频道,#genre#\n')
+        write_to_file(txt_file, unique_channels, '央视频道')
+        txt_file.write('卫视频道,#genre#\n')
+        write_to_file(txt_file, unique_channels, '卫视频道')
+        txt_file.write('其他频道,#genre#\n')
+        write_to_file(txt_file, unique_channels, '其他频道')
 
-    # 写入M3U文件
     with open(f"{output_prefix}.m3u", 'w', encoding='utf-8') as m3u_file:
         m3u_file.write('#EXTM3U\n')
-        for genre in ['央视频道', '卫视频道', '国际频道', '体育频道', '电影频道', '少儿频道', '音乐频道', '其他频道']:
-            for channel_name, channel_url, speed in unique_channels:
-                if genre_rules[genre](channel_name):
-                    m3u_file.write(f"#EXTINF:-1 tvg-name=\"{channel_name}\" group-title=\"{genre}\" tvg-logo=\"\" catchup=\"default\" catchup-days=\"7\",{channel_name}\n")
-                    m3u_file.write(f"{channel_url}\n")
+        def write_to_m3u(file, results, genre):
+            channel_counters = {}
+            for result in results:
+                channel_name, channel_url, _ = result
+                if genre == '央视频道' and 'CCTV' in channel_name or \
+                        genre == '卫视频道' and '卫视' in channel_name or \
+                        genre == '其他频道' and 'CCTV' not in channel_name and '卫视' not in channel_name and '测试' not in channel_name:
+                    if channel_name in channel_counters:
+                        if channel_counters[channel_name] < 8:
+                            file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
+                            file.write(f"{channel_url}\n")
+                            channel_counters[channel_name] += 1
+                    else:
+                        file.write(f"#EXTINF:-1 group-title=\"{genre}\",{channel_name}\n")
+                        file.write(f"{channel_url}\n")
+                        channel_counters[channel_name] = 1
+        write_to_m3u(m3u_file, unique_channels, '央视频道')
+        write_to_m3u(m3u_file, unique_channels, '卫视频道')
+        write_to_m3u(m3u_file, unique_channels, '其他频道')
 
-    # 写入速度文件
-    with open(f"{output_prefix}_speed.txt", 'w', encoding='utf-8') as speed_file:
+    with open("speed.txt", 'w', encoding='utf-8') as speed_file:
         for result in unique_channels:
             speed_file.write(f"{','.join(result)}\n")
 
-    # 写入无效频道日志
-    with open(f"{output_prefix}_invalid.log", 'w', encoding='utf-8') as log_file:
-        for channel_name, channel_url, reason in error_channels:
-            log_file.write(f"{channel_name},{channel_url},{reason}\n")
-
-    # 生成统计报告
-    channel_counter = Counter([genre for name, _, _ in unique_channels for genre, rule in genre_rules.items() if rule(name)])
-    
-    print(f"\n处理完成:")
-    print(f"- 总输入频道: {total_channels}")
-    print(f"- 有效频道: {len(speed_results)}")
-    print(f"- 因速度过滤的频道: {len([1 for _, _, reason in error_channels if '速度低于阈值' in reason])}")
-    print(f"- 最终输出频道: {len(unique_channels)}")
-    print(f"\n频道分类统计:")
-    for genre, count in channel_counter.items():
-        print(f"- {genre}: {count}")
-    
-    print(f"\n结果已保存到:")
-    print(f"- {output_prefix}.txt")
-    print(f"- {output_prefix}.m3u")
-    print(f"- {output_prefix}_speed.txt (包含速度信息)")
-    print(f"- {output_prefix}_invalid.log (无效频道日志)")
-    print(f"- iptv_generator.log (详细日志)")
-    
-    # 检查是否生成了空文件
-    if total_written == 0:
-        print("警告：没有有效频道被写入文件！")
-        # 可选：删除空文件
-        for ext in ['.txt', '.m3u', '_speed.txt']:
-            file_path = f"{output_prefix}{ext}"
-            if os.path.exists(file_path) and os.path.getsize(file_path) == 0:
-                os.remove(file_path)
-                print(f"已删除空文件: {file_path}")
-
+# 主入口函数
 def main():
-    parser = argparse.ArgumentParser(description='IPTV频道批量探测与测速工具')
-    parser.add_argument('--jsmpeg', help='jsmpeg-streamer模式CSV文件')
-    parser.add_argument('--txiptv', help='txiptv模式CSV文件')
-    parser.add_argument('--zhgxtv', help='zhgxtv模式CSV文件')
-    parser.add_argument('--output', default='output/itvlist', help='输出文件前缀')
-    parser.add_argument('--timeout', type=int, default=3, help='请求超时时间(秒)')
-    parser.add_argument('--retries', type=int, default=3, help='重试次数')
-    parser.add_argument('--min-speed', type=float, default=0.1, help='最小有效速度 (MB/s)')
-    parser.add_argument('--strict', action='store_true', help='启用严格验证模式')
+    parser = argparse.ArgumentParser(description='多模式IPTV频道批量探测与测速')
+    parser.add_argument('--jsmpeg', help='jsmpeg-streamer模式csv文件')
+    parser.add_argument('--txiptv', help='txiptv模式csv文件')
+    parser.add_argument('--zhgxtv', help='zhgxtv模式csv文件')
+    parser.add_argument('--output', default='itvlist', help='输出文件前缀')
     args = parser.parse_args()
 
-    # 检查至少指定了一个CSV文件
-    if not any([args.jsmpeg, args.txiptv, args.zhgxtv]):
-        print('请至少指定一个CSV文件 (--jsmpeg, --txiptv, --zhgxtv)')
-        return
-
-    print(f"开始处理IPTV频道...")
-    print(f"- 超时设置: {args.timeout}秒")
-    print(f"- 重试次数: {args.retries}次")
-    print(f"- 最小速度: {args.min_speed} MB/s")
-    print(f"- 严格验证: {'启用' if args.strict else '禁用'}")
-    
-    logging.info(f"程序启动，参数: {args}")
-
-    # 获取所有频道
     channels = []
     if args.jsmpeg:
-        print(f"\n正在处理JSMPEG模式: {args.jsmpeg}")
-        jsmpeg_channels = get_channels_alltv(args.jsmpeg, args.strict)
-        channels.extend(jsmpeg_channels)
-        print(f"JSMPEG模式获取到 {len(jsmpeg_channels)} 个有效频道")
-        logging.info(f"JSMPEG模式获取到 {len(jsmpeg_channels)} 个有效频道")
-
+        channels.extend(get_channels_alltv(args.jsmpeg))
     if args.zhgxtv:
-        print(f"\n正在处理ZHGXT模式: {args.zhgxtv}")
-        zhgxtv_channels = get_channels_hgxtv(args.zhgxtv, args.strict)
-        channels.extend(zhgxtv_channels)
-        print(f"ZHGXT模式获取到 {len(zhgxtv_channels)} 个有效频道")
-        logging.info(f"ZHGXT模式获取到 {len(zhgxtv_channels)} 个有效频道")
-
+        channels.extend(get_channels_hgxtv(args.zhgxtv))
     if args.txiptv:
-        print(f"\n正在处理TXIPTV模式: {args.txiptv}")
-        txiptv_channels = asyncio.run(get_channels_newnew(args.txiptv, args.strict))
-        channels.extend(txiptv_channels)
-        print(f"TXIPTV模式获取到 {len(txiptv_channels)} 个有效频道")
-        logging.info(f"TXIPTV模式获取到 {len(txiptv_channels)} 个有效频道")
+        channels.extend(asyncio.run(get_channels_newnew(args.txiptv)))
 
-    # 去重
-    unique_channels = []
-    seen = set()
-    for channel in channels:
-        key = (channel[0], channel[1])
-        if key not in seen:
-            unique_channels.append(channel)
-            seen.add(key)
+    if not channels:
+        print('请至少指定一个csv文件')
+        return
 
-    print(f"\n总共有 {len(unique_channels)} 个唯一频道需要过滤")
-    logging.info(f"总共有 {len(unique_channels)} 个唯一频道需要过滤")
-    
-    if not unique_channels:
-        print("错误：没有找到有效的频道源，程序退出。")
-        logging.error("没有找到有效的频道源")
-        return
-    
-    # 多级过滤
-    filtered_channels = filter_channels(unique_channels, args.min_speed)
-    print(f"过滤后剩余 {len(filtered_channels)} 个有效频道")
-    logging.info(f"过滤后剩余 {len(filtered_channels)} 个有效频道")
-    
-    if not filtered_channels:
-        print("错误：所有频道都被过滤，程序退出。")
-        logging.error("所有频道都被过滤")
-        return
-    
-    # 速度测试并输出
-    test_speed_and_output(filtered_channels, args.output, args.min_speed)
+    test_speed_and_output(channels, args.output)
 
 if __name__ == "__main__":
     main()
