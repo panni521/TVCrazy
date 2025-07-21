@@ -14,7 +14,7 @@ import logging
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # 修改为 DEBUG 级别以输出更多信息
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='iptv_generator.log'
 )
@@ -241,6 +241,7 @@ def get_channels_alltv(csv_file, strict=False):
         port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port))
 
+    logging.info(f"JSMPEG模式生成 {len(ip_range_urls)} 个URL进行验证")
     valid_urls = check_urls_concurrent(set(ip_range_urls), strict=strict)
     channels = []
     
@@ -296,6 +297,7 @@ async def get_channels_newnew(csv_file, strict=False):
         tasks = []
         for url in urls:
             modified_urls = await modify_urls(url)
+            logging.info(f"TXIPTV模式为 {url} 生成 {len(modified_urls)} 个URL进行验证")
             tasks.extend(asyncio.create_task(is_url_accessible(session, modified_url, semaphore)) for modified_url in modified_urls)
         results = await asyncio.gather(*tasks)
         return [result for result in results if result]
@@ -406,6 +408,7 @@ def get_channels_hgxtv(csv_file, strict=False):
         port = url[ip_end:]
         ip_range_urls.extend(generate_ip_range_urls(base_url, ip_address, port, "/ZHGXTV/Public/json/live_interface.txt"))
 
+    logging.info(f"ZHGXT模式生成 {len(ip_range_urls)} 个URL进行验证")
     valid_urls = check_urls_concurrent(set(ip_range_urls), strict=strict)
     channels = []
     
