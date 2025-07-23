@@ -1,0 +1,113 @@
+# IPTV直播源列表 - 2025-07-23 04:55:44
+# 每个分组保留前 20 个最快的频道
+
+#央视频道#genre#
+CGTN,http://english-livetx.cgtn.com/hls/yypdyyctzb_hd.m3u8  # 速度: 9.67 MB/s
+CGTN法语,http://espanol-liveali.cgtn.com/hls/LSveOGBaBw41Ea7ukkVAUdKQ220802LSTexu6xAuFH8VZNBLE1ZNEa220802cd.m3u8  # 速度: 4.61 MB/s
+CGTN纪录,https://english-livetx.cgtn.com/hls/yypdjlctzb_hd.m3u8  # 速度: 4.51 MB/s
+CGTN俄语,http://russian-livews.cgtn.com/hls/LSvexABhNipibK5KRuUkvHZ7220802LSTeze9o8tdFXMHsb1VosgoT220802cd.m3u8  # 速度: 4.16 MB/s
+CCTV14,https://event.pull.hebtv.com/jishi/cp2.m3u8  # 速度: 1.35 MB/s
+CCTV13,https://event.pull.hebtv.com/jishi/cp1.m3u8  # 速度: 1.28 MB/s
+CCTV7,http://drive.mxmy.net:8888/udp/239.3.1.61:8104  # 速度: 0.77 MB/s
+CCTV11,http://120.76.248.139/live/bfgd/4200000130.m3u8  # 速度: 0.77 MB/s
+CCTV13,http://ali-m-l.cztv.com/channels/lantian/channel21/1080p.m3u8  # 速度: 0.77 MB/s
+CCTV12,http://nas.hssvm.com:8888/udp/225.1.1.142:5002  # 速度: 0.76 MB/s
+CCTV8,http://drive.mxmy.net:8888/udp/239.3.1.175:8001  # 速度: 0.74 MB/s
+CCTV15,http://drive.mxmy.net:8888/udp/239.3.1.153:8136  # 速度: 0.74 MB/s
+CCTV9,http://nas.hssvm.com:8888/udp/225.1.1.119:5002  # 速度: 0.73 MB/s
+CCTV6,http://120.76.248.139/live/bfgd/4200000065.m3u8  # 速度: 0.67 MB/s
+CCTV17,http://120.76.248.139/live/bfgd/4200000204.m3u8  # 速度: 0.62 MB/s
+CCTV4,http://120.76.248.139/live/bfgd/4200000063.m3u8  # 速度: 0.58 MB/s
+CCTV13,http://jwplay.hebyun.com.cn/live/cctv13/1500k/tzwj_video.m3u8  # 速度: 0.38 MB/s
+CCTV15,http://nas.hssvm.com:8888/udp/225.1.1.26:5002  # 速度: 0.32 MB/s
+CCTV10,http://120.238.94.10:9901/tsfile/live/1028_1.m3u8  # 速度: 0.17 MB/s
+CCTV4,http://120.238.94.10:9901/tsfile/live/1021_1.m3u8  # 速度: 0.15 MB/s
+
+#卫视频道#genre#
+海峡卫视,http://38.64.72.148:80/hls/modn/list/4009/chunklist0.m3u8  # 速度: 1.4 MB/s
+兵团卫视,http://liveout.btzx.com.cn/62ds9e/yil08g.m3u8  # 速度: 1.23 MB/s
+东方卫视,http://218.89.240.144:59901/tsfile/live/0107_1.m3u8  # 速度: 1.01 MB/s
+康巴卫视,http://218.89.240.144:59901/tsfile/live/1010_1.m3u8  # 速度: 0.99 MB/s
+浙江卫视,https://ali-m-l.cztv.com/channels/lantian/channel001/1080p.m3u8  # 速度: 0.93 MB/s
+河北卫视,https://jwplay.hebyun.com.cn/live/hbwstv/1500k/tzwj_video.m3u8  # 速度: 0.92 MB/s
+江苏卫视,http://120.76.248.139/live/bfgd/4200000085.m3u8  # 速度: 0.89 MB/s
+山东卫视,http://l.cztvcloud.com/channels/lantian/SXshengzhou1/720p.m3u8  # 速度: 0.82 MB/s
+兵团卫视,http://218.89.240.144:59901/tsfile/live/0115_1.m3u8  # 速度: 0.81 MB/s
+青海卫视,http://120.76.248.139/live/bfgd/4200000111.m3u8  # 速度: 0.78 MB/s
+湖南卫视,http://drive.mxmy.net:8888/udp/239.3.1.132:8012  # 速度: 0.77 MB/s
+延边卫视,http://120.76.248.139/live/bfgd/4200000117.m3u8  # 速度: 0.77 MB/s
+安徽卫视,http://nas.hssvm.com:8888/udp/225.1.1.127:5002  # 速度: 0.73 MB/s
+浙江卫视,http://ali-m-l.cztv.com:80/channels/lantian/channel001/1080p.m3u8  # 速度: 0.72 MB/s
+辽宁卫视,http://120.76.248.139/live/bfgd/4200000185.m3u8  # 速度: 0.67 MB/s
+西藏卫视,http://120.76.248.139/live/bfgd/4200000121.m3u8  # 速度: 0.67 MB/s
+农林卫视,http://120.76.248.139/live/bfgd/4200000122.m3u8  # 速度: 0.64 MB/s
+黑龙江卫视,http://l.cztvcloud.com/channels/lantian/SXyuyao3/720p.m3u8  # 速度: 0.62 MB/s
+湖南卫视,http://nas.hssvm.com:8888/udp/225.1.1.114:5002  # 速度: 0.6 MB/s
+甘肃卫视,http://223.241.247.214:9901/tsfile/live/0141_1.m3u8  # 速度: 0.54 MB/s
+
+#省级频道#genre#
+北京青年,http://player.cntv.cn/standard/live_HLSDRM20180919.swf?v=180.171.5.8.9.6.3.9&ChannelID=btv8&videoTVChannel=btv8&P2PChannelID=pd://cctv_p2p_hdbtv8&tai=btv8&VideoName=btv8&channelID=btv8  # 速度: 7.7 MB/s
+北京科教,http://player.cntv.cn/standard/live_HLSDRM20180606.swf?ChannelID=btv3&P2PChannelID=pd://cctv_p2p_hdbtv3  # 速度: 5.96 MB/s
+湖南爱晚,http://p2.vzan.com/527645544/149039617847513156/live.m3u8  # 速度: 2.67 MB/s
+内蒙农牧,http://play1-qk.nmtv.cn:80/live/1686561299036179.m3u8  # 速度: 1.16 MB/s
+浙江经济,https://ali-m-l.cztv.com/channels/lantian/channel003/1080p.m3u8  # 速度: 1.12 MB/s
+浙江教科影视,https://ali-m-l.cztv.com/channels/lantian/channel004/1080p.m3u8  # 速度: 1.08 MB/s
+浙江钱江,https://ali-m-l.cztv.com/channels/lantian/channel002/1080p.m3u8  # 速度: 1.07 MB/s
+浙江教科,https://ali-m-l.cztv.com/channels/lantian/channel004/1080p.m3u8  # 速度: 1.05 MB/s
+浙江公共新闻,http://ali-m-l.cztv.com/channels/lantian/channel07/1080p.m3u8  # 速度: 1.05 MB/s
+浙江经济生活,http://ali-m-l.cztv.com/channels/lantian/channel03/1080p.m3u8  # 速度: 1.04 MB/s
+浙江钱江,http://ali-m-l.cztv.com/channels/lantian/channel002/720p.m3u8  # 速度: 1.03 MB/s
+浙江少儿,http://ali-m-l.cztv.com/channels/lantian/channel008/1080p.m3u8  # 速度: 1.01 MB/s
+安徽导视,http://dspdhls.appcoo.com:8888/live/dspd/index.m3u8  # 速度: 1.01 MB/s
+浙江钱江都市,https://ali-m-l.cztv.com/channels/lantian/channel002/1080p.m3u8  # 速度: 1.01 MB/s
+浙江国际,http://ali-m-l.cztv.com/channels/lantian/channel010/720p.m3u8  # 速度: 0.99 MB/s
+浙江教科,http://ali-m-l.cztv.com/channels/lantian/channel004/1080p.m3u8  # 速度: 0.98 MB/s
+浙江民生,http://ali-m-l.cztv.com/channels/lantian/channel06/720p.m3u8  # 速度: 0.98 MB/s
+浙江新闻,https://ali-m-l.cztv.com/channels/lantian/channel007/1080p.m3u8  # 速度: 0.95 MB/s
+浙江经济生活,https://ali-m-l.cztv.com/channels/lantian/channel003/1080p.m3u8  # 速度: 0.95 MB/s
+浙江经济生活,http://ali-m-l.cztv.com/channels/lantian/channel003/1080p.m3u8  # 速度: 0.94 MB/s
+
+#市级频道#genre#
+十堰新闻,http://p8.vzan.com/slowlive/034028687228317362/live.m3u8  # 速度: 4.64 MB/s
+嘉兴新闻综合,http://live.zohi.tv/video/s10001-fztv-1/index.m3u8  # 速度: 1.27 MB/s
+邯郸科技教育,https://jwcdnqx.hebyun.com.cn/live/hdkj/1500k/tzwj_video.m3u8  # 速度: 1.25 MB/s
+邢台综合,http://jwplay.hebyun.com.cn/live/xtsrmtzs/1500k/tzwj_video.m3u8  # 速度: 1.24 MB/s
+邢台综合,https://jwplay.hebyun.com.cn/live/xttv/1500k/tzwj_video.m3u8  # 速度: 1.14 MB/s
+邢台生活,https://jwcdnqx.hebyun.com.cn/live/xtcsshpd/1500k/tzwj_video.m3u8  # 速度: 1.11 MB/s
+广元综合,https://m3u8.channel.dzsm.com/nmip-media/channellive/channel100999/playlist.m3u8  # 速度: 1.07 MB/s
+临沂农科,https://m3u8-channel.lytv.tv/nmip-media/channellive/channel115062/playlist.m3u8  # 速度: 1.06 MB/s
+南通都市生活,https://cm-live.ntjoy.com/live/4f3.m3u8  # 速度: 1.06 MB/s
+广元公共,https://m3u8.channel.dzsm.com/nmip-media/channellive/channel101257/playlist.m3u8  # 速度: 1.04 MB/s
+嘉兴新闻综合,http://tvfile.jyrmt.cn:80/nmip-media/channellive/channel104452/playlist.m3u8  # 速度: 0.96 MB/s
+邯郸公共频道,https://jwcdnqx.hebyun.com.cn/live/hdgg/1500k/tzwj_video.m3u8  # 速度: 0.89 MB/s
+朝阳新闻综合,http://120.76.248.139/live/bfgd/4200000282.m3u8  # 速度: 0.8 MB/s
+乐山新闻综合,http://m3u8file.lstv.org.cn/nmip-media/channellive/channel1/playlist.m3u8  # 速度: 0.73 MB/s
+苏州社会经济,https://live-auth.51kandianshi.com/szgd/csztv2.m3u8  # 速度: 0.73 MB/s
+重庆卫视,http://drive.mxmy.net:8888/udp/239.3.1.122:8160  # 速度: 0.72 MB/s
+雅安新闻综合,https://play.yunxya.com/channellive/xinwen.m3u8  # 速度: 0.71 MB/s
+苏州新闻综合,https://live-auth.51kandianshi.com/szgd/csztv1.m3u8  # 速度: 0.69 MB/s
+深圳卫视,http://120.76.248.139/live/bfgd/4200000100.m3u8  # 速度: 0.65 MB/s
+烟台经济科技,http://live.yantaitv.cn/live/27f84144e95a4652ae9e5c211b2a6b55/405f3e33ba384aa0a16014d0becd1261-1.m3u8  # 速度: 0.64 MB/s
+
+#其它频道#genre#
+龙华电影,https://cdn8.163189.xyz/live/lhdy/stream.m3u8  # 速度: 13.75 MB/s
+2022年春晚,https://txmov2.a.kwimgs.com/bs3/video-hls/5224457109297710655_hlshd15.m3u8  # 速度: 10.84 MB/s
+1998年春晚,https://txmov2.a.kwimgs.com/bs3/video-hls/5225864507896315430_hlshd15.m3u8  # 速度: 10.15 MB/s
+2001年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQyMDFfMF8z_b_B70592cb7c4054e9cabb675e849bbf4bd.mp4  # 速度: 10.07 MB/s
+2010年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQ0MjlfMF8z_b_B8818807a00eed329a69fb494f405bd43.mp4  # 速度: 9.68 MB/s
+2009年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQzOTBfMF8z_b_B29a36a85e0277f6c2a1f033ef7c10708.mp4  # 速度: 9.5 MB/s
+2013年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQ1NjNfMF8z_b_B4fea55408dca4471a68a963ae096be59.mp4  # 速度: 9.35 MB/s
+2017年春晚,https://txmov2.a.kwimgs.com/bs3/video-hls/5191524564569524830_hlshd15.m3u8  # 速度: 9.31 MB/s
+2007年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQzMjNfMF8z_b_B00b069c7899976459ceeaa99353dfefe.mp4  # 速度: 9.29 MB/s
+1996年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/22/BMjAyMzAxMTMyMjEwMDNfNDAzMDAxOTlfOTM1MTIzMzYxNTJfMF8z_b_Bd841eae10ab1c9955ef55fbedfae6c45.mp4  # 速度: 9.15 MB/s
+1994年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/22/BMjAyMzAxMTMyMjEwMDNfNDAzMDAxOTlfOTM1MTIzMzYxMjNfMF8z_b_B3dde97f36273f04403d4dc5eec611a35.mp4  # 速度: 8.79 MB/s
+2004年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/21/BMjAyMzAxMTMyMTE4MzRfNDAzMDAxOTlfOTM1MDY4ODIxOTVfMF8z_b_B86c4430b82ff5a7f4e8132f6ee558536.mp4  # 速度: 8.71 MB/s
+2018年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/06/16/BMjAyMzAxMDYxNjMxMTRfNDAzMDAxOTlfOTI4OTY2ODE2MTBfMF8z_b_B11a778e34390a21de42d407e94f45b91.mp4  # 速度: 8.67 MB/s
+2002年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/21/BMjAyMzAxMTMyMTE4MzRfNDAzMDAxOTlfOTM1MDY4ODIxNDdfMF8z_b_Ba6271d10b7e6cfae83759033a091f257.mp4  # 速度: 8.62 MB/s
+2014年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/06/16/BMjAyMzAxMDYxNjMxMTNfNDAzMDAxOTlfOTI4OTY2ODAzNjlfMF8z_b_Bdee65c77f9e7b2120a185c919dad81d2.mp4  # 速度: 8.5 MB/s
+2006年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQyNzlfMF8z_b_Bbc3703fc331dc994c50859c19aad28ff.mp4  # 速度: 8.47 MB/s
+1993年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/22/BMjAyMzAxMTMyMjEwMDNfNDAzMDAxOTlfOTM1MTIzMzYwODJfMF8z_b_B647d10e431b4cc5e48e6c77347d69021.mp4  # 速度: 8.44 MB/s
+2005年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/20/BMjAyMzAxMTMyMDA5MjJfNDAzMDAxOTlfOTM0OTkwNDQyMzhfMF8z_b_B35ad7cc86aec8fc9e5ddfb31fc7bed63.mp4  # 速度: 8.3 MB/s
+龙梅子都说,https://vd3.bdstatic.com:443/mda-ma7cm59x1m4015ip/v2-hknm/1080p/mda-ma7cm59x1m4015ip.mp4  # 速度: 8.23 MB/s
+2000年春晚,https://alimov2.a.kwimgs.com/upic/2023/01/13/21/BMjAyMzAxMTMyMTE4MzRfNDAzMDAxOTlfOTM1MDY4ODIxMTNfMF8z_b_Bdddf4e7ef0ff6cfd477857bb40e78419.mp4  # 速度: 8.23 MB/s
+
