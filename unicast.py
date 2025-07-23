@@ -11,7 +11,7 @@ import socket
 import argparse
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse, urljoin
@@ -23,6 +23,8 @@ class ChannelInfo:
     name: str
     url: str
     speed: float = 0.0
+    # 用于CCTV频道排序的数字
+    cctv_number: Optional[int] = None
 
 
 class ChannelGroup:
@@ -228,7 +230,9 @@ class UnicastProcessor:
                     
                     for url in urls:
                         if url and url.startswith('http'):
-                            channels.append(ChannelInfo(name, url))
+                            # 解析CCTV频道数字用于排序
+                            cctv_number = self._extract_cctv_number(name)
+                            channels.append(ChannelInfo(name, url, cctv_number=cctv_number))
         
         return channels
     
@@ -237,6 +241,23 @@ class UnicastProcessor:
         name = re.sub(r'CCTV-(\d+)', r'CCTV\1', name, flags=re.IGNORECASE)
         name = re.sub(r'CGTN-(\w+)', r'CGTN\1', name, flags=re.IGNORECASE)
         return name
+    
+    def _extract_cctv_number(self, name):
+        """提取CCTV频道的数字，用于排序"""
+        # 匹配CCTV后跟数字的情况
+        match = re.match(r'^CCTV(\d+)', name, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+            
+        # 匹配"中央一台"到"中央十七台"的情况
+        cctv_map = {
+            "中央一台": 1, "中央二台": 2, "中央三台": 3, "中央四台": 4,
+            "中央五台": 5, "中央六台": 6, "中央七台": 7, "中央八台": 8,
+            "中央九台": 9, "中央十台": 10, "中央十一台": 11, "中央十二台": 12,
+            "中央十三台": 13, "中央十四台": 14, "中央十五台": 15, "中央十六台": 16,
+            "中央十七台": 17
+        }
+        return cctv_map.get(name, None)
     
     def test_stream_speed(self, channel: ChannelInfo, timeout=8):
         """测试单个流媒体速度"""
@@ -465,9 +486,18 @@ class UnicastProcessor:
             group = self._determine_group(name)
             groups[group].append(channel)
         
-        # 按速度排序每个分组
+        # 按速度排序每个分组，央视频道额外按数字排序
         for group in groups:
-            groups[group].sort(key=lambda x: x.speed, reverse=True)
+            if group == ChannelGroup.CCTV:
+                # 央视频道先按数字排序，再按速度排序
+                groups[group].sort(key=lambda x: (
+                    x.cctv_number if x.cctv_number is not None else float('inf'),
+                    -x.speed  # 速度降序
+                ))
+            else:
+                # 其他分组按速度排序
+                groups[group].sort(key=lambda x: x.speed, reverse=True)
+            
             # 只保留前N个
             groups[group] = groups[group][:self.top_count]
         
@@ -479,7 +509,9 @@ class UnicastProcessor:
         if re.match(r'^CCTV\d+', name, re.IGNORECASE) or \
            re.match(r'^CGTN', name, re.IGNORECASE) or \
            name in ("中央一台", "中央二台", "中央三台", "中央四台", "中央五台", 
-                   "中央六台", "中央七台", "中央八台", "中央九台", "中央十台"):
+                   "中央六台", "中央七台", "中央八台", "中央九台", "中央十台",
+                   "中央十一台", "中央十二台", "中央十三台", "中央十四台", 
+                   "中央十五台", "中央十六台", "中央十七台"):
             return ChannelGroup.CCTV
             
         # 检查是否为港澳台频道
