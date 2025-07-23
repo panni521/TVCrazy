@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 """
 IPTV直播源下载、合并、测速与分组工具
-
-功能：
-1. 从指定URL列表下载直播源txt文件
-2. 合并所有频道（忽略原分组）
-3. 对流媒体地址进行测速
-4. 按速度排序并保留前N个
-5. 重新分组并生成结果文件
-
-用法：
-python unicast.py --top 20
 """
 
 import os
@@ -24,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse, urljoin
 
 
 @dataclass
@@ -111,10 +102,12 @@ class UnicastProcessor:
     
     def __init__(self, top_count=20):
         self.top_count = top_count
-        self.download_dir = Path("downloads")
-        self.output_dir = Path("output")
-        self.temp_file = Path("txt.tmp")  # 汇总临时文件
-        self.speed_log = Path("speed.log")  # 测速日志文件
+        # 调整路径适应GitHub Actions环境
+        self.root_dir = Path(__file__).parent
+        self.download_dir = self.root_dir / "downloads"
+        self.output_dir = self.root_dir / "output"
+        self.temp_file = self.root_dir / "txt.tmp"
+        self.speed_log = self.root_dir / "speed.log"
         self._create_directories()
         
     def _create_directories(self):
@@ -128,7 +121,6 @@ class UnicastProcessor:
         
         def download_single_file(url):
             try:
-                # 解析URL生成唯一文件名
                 filename = self._generate_unique_filename(url)
                 filepath = self.download_dir / filename
                 
@@ -161,28 +153,19 @@ class UnicastProcessor:
     
     def _generate_unique_filename(self, url):
         """根据URL生成唯一的文件名"""
-        from urllib.parse import urlparse
-        
         parsed = urlparse(url)
         path_parts = [part for part in parsed.path.split('/') if part]
         
-        # 获取原始文件名
         original_filename = path_parts[-1] if path_parts else "unknown.txt"
-        
-        # 如果没有.txt扩展名，添加它
         if not original_filename.endswith('.txt'):
             original_filename = f"{original_filename}.txt"
         
-        # 生成前缀：使用域名和路径
         domain = parsed.netloc.replace('.', '_')
-        
-        # 如果路径有多个部分，使用倒数第二个作为前缀
         if len(path_parts) > 1:
-            prefix = path_parts[-2]  # 使用目录名作为前缀
+            prefix = path_parts[-2]
         else:
-            prefix = domain.split('_')[0]  # 使用域名第一部分
+            prefix = domain.split('_')[0]
         
-        # 组合生成唯一文件名
         name_without_ext = original_filename.rsplit('.', 1)[0]
         unique_filename = f"{prefix}_{name_without_ext}.txt"
         
@@ -192,7 +175,7 @@ class UnicastProcessor:
         """解析txt文件并提取频道信息"""
         print("解析直播源文件...")
         all_channels = []
-        all_content = []  # 收集所有文件内容用于合并
+        all_content = []
         
         for filepath in filepaths:
             try:
@@ -208,9 +191,7 @@ class UnicastProcessor:
             except Exception as e:
                 print(f"✗ 解析失败 {filepath}: {e}")
         
-        # 生成汇总临时文件
         self._create_merged_temp_file(all_content)
-        
         print(f"总共解析出 {len(all_channels)} 个频道")
         return all_channels
     
@@ -233,24 +214,18 @@ class UnicastProcessor:
         lines = [line.strip() for line in content.split('\n') if line.strip()]
         
         for line in lines:
-            # 跳过分组行
             if line.endswith('#genre#'):
                 continue
                 
-            # 解析频道行：频道名,url或url1#url2#url3
             if ',' in line:
                 parts = line.split(',', 1)
                 if len(parts) == 2:
                     name = parts[0].strip()
                     url_part = parts[1].strip()
                     
-                    # 统一频道名称格式：将CCTV-1统一为CCTV1
                     name = self._normalize_channel_name(name)
-                    
-                    # 处理多个URL用#分隔的情况
                     urls = [url.strip() for url in url_part.split('#') if url.strip()]
                     
-                    # 为每个URL创建频道条目
                     for url in urls:
                         if url and url.startswith('http'):
                             channels.append(ChannelInfo(name, url))
@@ -259,7 +234,6 @@ class UnicastProcessor:
     
     def _normalize_channel_name(self, name):
         """统一频道名称格式"""
-        # 将CCTV-1统一为CCTV1，CGTN-英语统一为CGTN英语等
         name = re.sub(r'CCTV-(\d+)', r'CCTV\1', name, flags=re.IGNORECASE)
         name = re.sub(r'CGTN-(\w+)', r'CGTN\1', name, flags=re.IGNORECASE)
         return name
@@ -267,20 +241,17 @@ class UnicastProcessor:
     def test_stream_speed(self, channel: ChannelInfo, timeout=8):
         """测试单个流媒体速度"""
         try:
-            # 创建会话，设置更短的超时
             session = requests.Session()
             session.headers.update({
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
             
-            # 如果是M3U8流，先获取M3U8文件内容
             if channel.url.endswith('.m3u8'):
                 return self._test_m3u8_speed(session, channel, timeout)
             else:
                 return self._test_direct_stream_speed(session, channel, timeout)
             
         except Exception as e:
-            # 可以记录具体错误信息用于调试
             pass
         
         channel.speed = 0.0
@@ -289,19 +260,15 @@ class UnicastProcessor:
     def _test_m3u8_speed(self, session, channel: ChannelInfo, timeout=8):
         """测试M3U8流媒体速度"""
         try:
-            # 1. 获取M3U8文件 - 缩短超时时间
             m3u8_response = session.get(channel.url, timeout=5)
             m3u8_response.raise_for_status()
             m3u8_content = m3u8_response.text
             
-            # 2. 解析M3U8文件，提取TS分片URL
             ts_urls = self._extract_ts_urls(m3u8_content, channel.url)
-            
             if not ts_urls:
                 channel.speed = 0.0
                 return channel
             
-            # 3. 只测试第一个TS分片的速度，减少测试时间
             ts_url = ts_urls[0]
             start_time = time.time()
             
@@ -310,26 +277,24 @@ class UnicastProcessor:
                 response.raise_for_status()
                 
                 downloaded_size = 0
-                target_size = 2 * 1024 * 1024  # 降低到2MB
+                target_size = 2 * 1024 * 1024
                 
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         downloaded_size += len(chunk)
                         
-                    # 如果测试时间超过5秒就停止
                     current_time = time.time()
                     if (current_time - start_time) > 5:
                         break
                         
-                    # 达到目标大小就停止
                     if downloaded_size >= target_size:
                         break
                 
                 elapsed_time = time.time() - start_time
-                min_size = 256 * 1024  # 最少256KB才计算速度
+                min_size = 256 * 1024
                 
                 if elapsed_time > 0 and downloaded_size >= min_size:
-                    speed = downloaded_size / elapsed_time / 1024 / 1024  # MB/s
+                    speed = downloaded_size / elapsed_time / 1024 / 1024
                     channel.speed = round(speed, 2)
                 else:
                     channel.speed = 0.0
@@ -351,9 +316,7 @@ class UnicastProcessor:
         for line in lines:
             line = line.strip()
             if line and not line.startswith('#'):
-                # 如果是相对路径，拼接完整URL
                 if not line.startswith('http'):
-                    from urllib.parse import urljoin
                     ts_url = urljoin(base_url, line)
                 else:
                     ts_url = line
@@ -364,15 +327,13 @@ class UnicastProcessor:
     def _test_direct_stream_speed(self, session, channel: ChannelInfo, timeout=8):
         """测试直接流媒体速度"""
         try:
-            # 下载前2MB数据计算速度，缩短测试时间
             response = session.get(channel.url, stream=True, timeout=timeout)
             response.raise_for_status()
             
             downloaded_size = 0
-            target_size = 2 * 1024 * 1024  # 2MB
-            min_size = 256 * 1024  # 最少下载256KB才计算速度
+            target_size = 2 * 1024 * 1024
+            min_size = 256 * 1024
             
-            # 记录开始下载数据的时间
             data_start_time = time.time()
             
             for chunk in response.iter_content(chunk_size=8192):
@@ -380,18 +341,15 @@ class UnicastProcessor:
                     downloaded_size += len(chunk)
                     current_time = time.time()
                     
-                    # 如果下载时间超过5秒就停止
                     if (current_time - data_start_time) > 5:
                         break
                         
-                    # 达到目标大小就停止
                     if downloaded_size >= target_size:
                         break
             
-            # 计算速度
             elapsed_time = time.time() - data_start_time
             if elapsed_time > 0 and downloaded_size >= min_size:
-                speed = downloaded_size / elapsed_time / 1024 / 1024  # MB/s
+                speed = downloaded_size / elapsed_time / 1024 / 1024
                 channel.speed = round(speed, 2)
             else:
                 channel.speed = 0.0
@@ -406,19 +364,13 @@ class UnicastProcessor:
         """并发测速所有频道"""
         print(f"开始测速 {len(channels)} 个频道...")
         
-        # 初始化测速日志文件
         self._init_speed_log()
         
         def test_single_channel(index, channel):
-            import signal
             import threading
             
             result_container = [None]
             exception_container = [None]
-            
-            def timeout_handler():
-                # 超时处理函数
-                exception_container[0] = "timeout"
             
             def test_worker():
                 try:
@@ -426,107 +378,80 @@ class UnicastProcessor:
                 except Exception as e:
                     exception_container[0] = str(e)
             
-            # 创建测试线程
             test_thread = threading.Thread(target=test_worker)
             test_thread.daemon = True
             test_thread.start()
-            
-            # 等待最多12秒
             test_thread.join(timeout=12)
             
             if test_thread.is_alive():
-                # 线程还在运行，说明超时了
                 channel.speed = 0.0
                 result = channel
                 print(f"[{index+1}/{len(channels)}] {channel.name}: 超时")
             elif exception_container[0]:
-                # 发生异常
                 channel.speed = 0.0
                 result = channel
                 print(f"[{index+1}/{len(channels)}] {channel.name}: 测试失败")
             elif result_container[0]:
-                # 测试成功
                 result = result_container[0]
                 if result.speed > 0:
                     print(f"[{index+1}/{len(channels)}] {channel.name}: {result.speed:.2f} MB/s")
                 else:
-                    print(f"[{index+1}/{len(channels)}] {channel.name}: 测试失败")
+                    print(f"[{index+1}/{len(channels)}] {channel.name}: 速度为0")
             else:
-                # 未知情况
                 channel.speed = 0.0
                 result = channel
                 print(f"[{index+1}/{len(channels)}] {channel.name}: 未知错误")
-            
-            # 写入测速日志
-            self._write_speed_log(channel.name, channel.url, result.speed)
-            
+                
+            # 记录测速结果
+            self._log_speed_result(result)
             return result
         
+        # 并发测试
         tested_channels = []
-        
-        # 进一步减少并发数，避免网络拥堵和系统资源耗尽
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(test_single_channel, i, channel) 
                       for i, channel in enumerate(channels)]
             
             for future in as_completed(futures):
-                try:
-                    result = future.result(timeout=15)  # 给future本身也加个超时
-                    if result.speed > 0:
-                        tested_channels.append(result)
-                except Exception as e:
-                    print(f"获取测试结果时出错: {e}")
-                    continue
+                tested_channels.append(future.result())
         
-        print(f"测速完成，有效频道: {len(tested_channels)}")
-        print(f"测速日志已保存到: {self.speed_log}")
+        print("测速完成")
         return tested_channels
     
     def _init_speed_log(self):
-        """初始化测速日志文件"""
+        """初始化测速日志"""
         try:
             with open(self.speed_log, 'w', encoding='utf-8') as f:
-                f.write("# IPTV频道测速日志\n")
-                f.write(f"# 开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("# 格式: 频道名称 | 下载速度(MB/s) | 流媒体地址\n\n")
+                f.write(f"# 测速日志 - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("# 频道名称 | 速度(MB/s) | URL\n")
         except Exception as e:
             print(f"✗ 初始化测速日志失败: {e}")
     
-    def _write_speed_log(self, channel_name, url, speed):
-        """写入测速日志"""
+    def _log_speed_result(self, channel: ChannelInfo):
+        """记录测速结果到日志"""
         try:
             with open(self.speed_log, 'a', encoding='utf-8') as f:
-                if speed > 0:
-                    f.write(f"{channel_name} | {speed:.2f} MB/s | {url}\n")
-                else:
-                    f.write(f"{channel_name} | 测试失败 | {url}\n")
+                f.write(f"{channel.name} | {channel.speed} | {channel.url}\n")
         except Exception as e:
-            print(f"✗ 写入测速日志失败: {e}")
+            print(f"✗ 记录测速日志失败: {e}")
     
-    def group_channel(self, channel_name):
-        """对频道进行分组"""
-        name = channel_name.lower()
+    def deduplicate_channels(self, channels):
+        """去重频道（基于名称和URL）"""
+        seen = set()
+        unique_channels = []
         
-        if "cctv" in name or "cgtn" in name:
-            return ChannelGroup.CCTV
+        for channel in channels:
+            key = (channel.name, channel.url)
+            if key not in seen:
+                seen.add(key)
+                unique_channels.append(channel)
         
-        if any(key in channel_name for key in self.wei_shi):
-            return ChannelGroup.WEI_SHI
-            
-        if any(key in channel_name for key in self.locals):
-            return ChannelGroup.LOCAL
-            
-        if any(key in channel_name for key in self.hkmotw):
-            return ChannelGroup.HKMOTW
-            
-        if any(key in channel_name for key in self.citys):
-            return ChannelGroup.CITY
-            
-        return ChannelGroup.OTHER
+        print(f"去重完成: 原始 {len(channels)} 个，去重后 {len(unique_channels)} 个")
+        return unique_channels
     
     def group_channels(self, channels):
-        """将频道按组分类"""
-        grouped = {
+        """对频道进行分组"""
+        groups = {
             ChannelGroup.CCTV: [],
             ChannelGroup.WEI_SHI: [],
             ChannelGroup.LOCAL: [],
@@ -536,139 +461,138 @@ class UnicastProcessor:
         }
         
         for channel in channels:
-            group = self.group_channel(channel.name)
-            grouped[group].append(channel)
+            name = channel.name
+            group = self._determine_group(name)
+            groups[group].append(channel)
         
-        return grouped
+        # 按速度排序每个分组
+        for group in groups:
+            groups[group].sort(key=lambda x: x.speed, reverse=True)
+            # 只保留前N个
+            groups[group] = groups[group][:self.top_count]
+        
+        return groups
     
-    def generate_m3u_file(self, grouped_channels, output_path):
-        """生成M3U格式的播放列表文件"""
-        print(f"生成M3U文件: {output_path}")
-        
-        # 按组的优先级排序
-        group_order = [
-            ChannelGroup.CCTV,
-            ChannelGroup.WEI_SHI, 
-            ChannelGroup.LOCAL,
-            ChannelGroup.HKMOTW,
-            ChannelGroup.CITY,
-            ChannelGroup.OTHER
-        ]
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("#EXTM3U\n")
+    def _determine_group(self, name):
+        """确定频道所属分组"""
+        # 检查是否为央视频道
+        if re.match(r'^CCTV\d+', name, re.IGNORECASE) or \
+           re.match(r'^CGTN', name, re.IGNORECASE) or \
+           name in ("中央一台", "中央二台", "中央三台", "中央四台", "中央五台", 
+                   "中央六台", "中央七台", "中央八台", "中央九台", "中央十台"):
+            return ChannelGroup.CCTV
             
-            for group_name in group_order:
-                channels = grouped_channels.get(group_name, [])
-                if not channels:
-                    continue
-                    
-                for channel in channels:
-                    f.write(f'#EXTINF:-1 group-title="{group_name}",{channel.name}\n')
-                    f.write(f'{channel.url}\n')
-        
-        print(f"M3U文件已生成，包含以下分组:")
-        for group_name in group_order:
-            count = len(grouped_channels.get(group_name, []))
-            if count > 0:
-                print(f"  {group_name}: {count} 个频道")
+        # 检查是否为港澳台频道
+        for keyword in self.hkmotw:
+            if keyword in name:
+                return ChannelGroup.HKMOTW
+                
+        # 检查是否为市级频道
+        for keyword in self.citys:
+            if keyword in name:
+                return ChannelGroup.CITY
+                
+        # 检查是否为卫视频道
+        for keyword in self.wei_shi:
+            if keyword in name:
+                return ChannelGroup.WEI_SHI
+                
+        # 检查是否为省级频道
+        for keyword in self.locals:
+            if keyword in name:
+                return ChannelGroup.LOCAL
+                
+        # 其他频道
+        return ChannelGroup.OTHER
     
-    def generate_txt_file(self, grouped_channels, output_path):
-        """生成TXT格式的播放列表文件"""
-        print(f"生成TXT文件: {output_path}")
+    def generate_output_files(self, groups):
+        """生成M3U和TXT格式的输出文件"""
+        m3u_path = self.output_dir / "unicast_result.m3u"
+        txt_path = self.output_dir / "unicast_result.txt"
         
-        # 按组的优先级排序
-        group_order = [
-            ChannelGroup.CCTV,
-            ChannelGroup.WEI_SHI,
-            ChannelGroup.LOCAL, 
-            ChannelGroup.HKMOTW,
-            ChannelGroup.CITY,
-            ChannelGroup.OTHER
-        ]
+        # 生成M3U文件
+        try:
+            with open(m3u_path, 'w', encoding='utf-8') as f:
+                f.write("#EXTM3U\n")
+                f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# 每个分组保留前 {self.top_count} 个最快的频道\n\n")
+                
+                for group_name, channels in groups.items():
+                    if channels:
+                        f.write(f"#EXTINF:-1 group-title=\"{group_name}\"\n")
+                        for channel in channels:
+                            f.write(f"#EXTINF:-1 tvg-name=\"{channel.name}\" tvg-logo=\"\" group-title=\"{group_name}\",{channel.name}\n")
+                            f.write(f"{channel.url}\n")
+                        f.write("\n")
+            
+            print(f"✓ M3U文件已生成: {m3u_path}")
+        except Exception as e:
+            print(f"✗ 生成M3U文件失败: {e}")
         
-        with open(output_path, 'w', encoding='utf-8') as f:
-            for group_name in group_order:
-                channels = grouped_channels.get(group_name, [])
-                if not channels:
-                    continue
-                    
-                f.write(f"{group_name},#genre#\n")
-                for channel in channels:
-                    f.write(f"{channel.name},{channel.url}\n")
-                f.write("\n")
+        # 生成TXT文件
+        try:
+            with open(txt_path, 'w', encoding='utf-8') as f:
+                f.write(f"# IPTV直播源列表 - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# 每个分组保留前 {self.top_count} 个最快的频道\n\n")
+                
+                for group_name, channels in groups.items():
+                    if channels:
+                        f.write(f"#{group_name}#genre#\n")
+                        for channel in channels:
+                            f.write(f"{channel.name},{channel.url}  # 速度: {channel.speed} MB/s\n")
+                        f.write("\n")
+            
+            print(f"✓ TXT文件已生成: {txt_path}")
+        except Exception as e:
+            print(f"✗ 生成TXT文件失败: {e}")
+        
+        return m3u_path, txt_path
     
     def run(self):
-        """运行主流程"""
-        print("=== IPTV直播源处理工具 ===")
+        """执行主流程"""
+        start_time = time.time()
+        print("===== 开始处理IPTV直播源 =====")
         
         # 1. 下载文件
         downloaded_files = self.download_files()
         if not downloaded_files:
-            print("没有成功下载任何文件，程序退出")
+            print("没有下载到任何文件，程序退出")
             return
-            
-        # 2. 解析频道
-        all_channels = self.parse_txt_files(downloaded_files)
-        if not all_channels:
+        
+        # 2. 解析文件
+        channels = self.parse_txt_files(downloaded_files)
+        if not channels:
             print("没有解析到任何频道，程序退出")
             return
         
-        # 3. 去重（基于频道名和URL）
-        unique_channels = []
-        seen = set()
-        for channel in all_channels:
-            key = f"{channel.name}_{channel.url}"
-            if key not in seen:
-                seen.add(key)
-                unique_channels.append(channel)
-        
-        print(f"去重后剩余 {len(unique_channels)} 个频道")
+        # 3. 去重
+        unique_channels = self.deduplicate_channels(channels)
         
         # 4. 测速
         tested_channels = self.speed_test_channels(unique_channels)
         
-        # 5. 按速度排序并取前N个
-        tested_channels.sort(key=lambda x: x.speed, reverse=True)
-        top_channels = tested_channels[:self.top_count]
+        # 过滤掉速度为0的频道
+        valid_channels = [c for c in tested_channels if c.speed > 0]
+        print(f"有效频道: {len(valid_channels)} 个 (速度>0)")
         
-        print(f"保留速度最快的前 {len(top_channels)} 个频道")
+        if not valid_channels:
+            print("没有有效的频道，程序退出")
+            return
         
-        # 6. 重新分组
-        grouped_channels = self.group_channels(top_channels)
+        # 5. 分组
+        groups = self.group_channels(valid_channels)
         
-        # 7. 生成输出文件
-        m3u_output = self.output_dir / "unicast_result.m3u"
-        txt_output = self.output_dir / "unicast_result.txt"
+        # 6. 生成输出文件
+        self.generate_output_files(groups)
         
-        self.generate_m3u_file(grouped_channels, m3u_output)
-        self.generate_txt_file(grouped_channels, txt_output)
-        
-        print("\n=== 处理完成 ===")
-        print(f"输出文件:")
-        print(f"  M3U格式: {m3u_output}")
-        print(f"  TXT格式: {txt_output}")
-
-
-def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(
-        description='IPTV直播源下载、合并、测速与分组工具',
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    
-    parser.add_argument('--top', type=int, default=20,
-                       help='保留速度最快的前N个频道 (默认: 20)')
-    
-    args = parser.parse_args()
-    
-    if args.top < 1:
-        print("错误: --top 参数必须大于0")
-        sys.exit(1)
-    
-    processor = UnicastProcessor(top_count=args.top)
-    processor.run()
+        end_time = time.time()
+        print(f"\n===== 处理完成，耗时 {end_time - start_time:.2f} 秒 =====")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='IPTV直播源处理工具')
+    parser.add_argument('--top', type=int, default=20, help='每个分组保留的频道数量')
+    args = parser.parse_args()
+    
+    processor = UnicastProcessor(top_count=args.top)
+    processor.run()
