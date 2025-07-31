@@ -1,0 +1,45 @@
+name: 更新IPTV直播源unicast
+
+on:
+  # 定时自动更新（每天UTC 0点，即北京时间8点）
+  schedule:
+    - cron: '0 0 * * *'
+  # 手动触发
+  workflow_dispatch:
+
+jobs:
+  build-iptv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          cd mobileunicast
+          pip install requests
+
+      - name: 运行直播源处理脚本
+        run: |
+          cd mobileunicast
+          python unicast.py --top 10
+
+      - name: 提交更新结果
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add mobileunicast/dist/iptv_live.m3u
+          git commit -m "自动更新IPTV直播源 $(date +'%Y-%m-%d')" || echo "没有更新内容"
+          git push origin main
+
+      - name: 上传输出文件作为Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptv-sources
+          path: mobileunicast/dist/iptv_live.m3u
