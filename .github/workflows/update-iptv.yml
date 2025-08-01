@@ -1,10 +1,10 @@
 name: 更新IPTV直播源unicast
 
 on:
-  # 定时自动更新（每天UTC 0点，即北京时间8点）
+  # 每天 UTC 0 点自动运行
   schedule:
     - cron: '0 0 * * *'
-  # 手动触发
+  # 支持手动触发
   workflow_dispatch:
 
 jobs:
@@ -29,6 +29,13 @@ jobs:
         run: |
           cd mobileunicast
           python unicast.py --top 10
+
+      - name: 检查输出文件是否存在
+        run: |
+          if [ ! -f mobileunicast/dist/iptv_live.m3u ]; then
+            echo "mobileunicast/dist/iptv_live.m3u 文件不存在，终止流程"
+            exit 1
+          fi
 
       - name: 提交更新结果
         run: |
