@@ -34,4 +34,4 @@ jobs:
         with:
           name: iptv_live
           path: output/iptv_live.m3u
-          if-no-files-found: create
+          if-no-files-found: warn   # 这里已修正
