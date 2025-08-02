@@ -1,41 +1,36 @@
 name: 更新IPTV直播源unicast
 
 on:
-  push:
-    paths:
-      - 'mobileunicast/unicast.py'
-      - '.github/workflows/run-unicast.yml'
-  pull_request:
-    paths:
-      - 'mobileunicast/unicast.py'
-      - '.github/workflows/run-unicast.yml'
+  workflow_dispatch:      # 允许手动触发
+  schedule:               # 自动定时运行（例如每天凌晨 2 点 UTC）
+    - cron: '0 2 * * *'
 
 jobs:
-  run-unicast:
+  update-iptv:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.9'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Run mobileunicast/unicast.py
-      run: |
-        mkdir -p dist
-        python mobileunicast/unicast.py
+      - name: Run IPTV Python script
+        run: |
+          mkdir -p dist
+          python mobileunicast/unicast.py
 
-    - name: Upload generated IPTV M3U
-      uses: actions/upload-artifact@v4
-      with:
-        name: iptv_live
-        path: dist/iptv_live.m3u
-        if-no-files-found: create
+      - name: Upload IPTV M3U file
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptv_live
+          path: dist/iptv_live.m3u
+          if-no-files-found: create
