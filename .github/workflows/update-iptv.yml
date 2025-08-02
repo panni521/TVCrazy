@@ -2,7 +2,7 @@ name: 更新IPTV直播源unicast
 
 on:
   workflow_dispatch:      # 允许手动触发
-  schedule:               # 自动定时运行（例如每天凌晨 2 点 UTC）
+  schedule:               # 自动定时运行（每天凌晨2点UTC）
     - cron: '0 2 * * *'
 
 jobs:
@@ -21,6 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install requests
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run IPTV Python script
@@ -32,5 +33,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: iptv_live
-          path: dist/iptv_live.m3u
+          path: output/iptv_live.m3u
           if-no-files-found: create
