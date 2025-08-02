@@ -56,11 +56,22 @@ class IPTVProcessor:
     SOURCE_URLS = [
         "https://live.zbds.org/tv/yd.txt",
         "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/anhui/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/fujian/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/guangxi/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/hebei/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/heilongjiang/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/henan/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/hubei/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/jiangxi/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/jiangsu/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/shan3xi/mobile.txt",
+        "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/shandong/mobile.txt",
         "https://raw.githubusercontent.com/xisohi/CHINA-IPTV/main/Unicast/zhejiang/mobile.txt",
         "https://mycode.zhoujie218.top/me/jsyd.txt",
         "https://live.zbds.org/tv/zjyd.txt",
         "https://live.zbds.org/tv/zjyd1.txt",
-        "https://live.zbds.org/tv/jxyd.txt"
+        "https://live.zbds.org/tv/jxyd.txt",
+        "https://live.zbds.org/tv/sxyd.txt"
     ]
     
     # 分组匹配关键字（优化正则表达式）
