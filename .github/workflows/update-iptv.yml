@@ -1,52 +1,41 @@
 name: 更新IPTV直播源unicast
 
 on:
-  # 每天 UTC 0 点自动运行
-  schedule:
-    - cron: '0 0 * * *'
-  # 支持手动触发
-  workflow_dispatch:
+  push:
+    paths:
+      - 'mobileunicast/unicast.py'
+      - '.github/workflows/run-unicast.yml'
+  pull_request:
+    paths:
+      - 'mobileunicast/unicast.py'
+      - '.github/workflows/run-unicast.yml'
 
 jobs:
-  build-iptv:
+  run-unicast:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: 设置Python环境
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-          cache: 'pip'
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
 
-      - name: 安装依赖
-        run: |
-          cd mobileunicast
-          pip install requests
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: 运行直播源处理脚本
-        run: |
-          cd mobileunicast
-          python unicast.py --top 10
+    - name: Run mobileunicast/unicast.py
+      run: |
+        mkdir -p dist
+        python mobileunicast/unicast.py
 
-      - name: 检查输出文件是否存在
-        run: |
-          if [ ! -f mobileunicast/dist/iptv_live.m3u ]; then
-            echo "mobileunicast/dist/iptv_live.m3u 文件不存在，终止流程"
-            exit 1
-          fi
-
-      - name: 提交更新结果
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add mobileunicast/dist/iptv_live.m3u
-          git commit -m "自动更新IPTV直播源 $(date +'%Y-%m-%d')" || echo "没有更新内容"
-          git push origin main
-
-      - name: 上传输出文件作为Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptv-sources
-          path: mobileunicast/dist/iptv_live.m3u
+    - name: Upload generated IPTV M3U
+      uses: actions/upload-artifact@v4
+      with:
+        name: iptv_live
+        path: dist/iptv_live.m3u
+        if-no-files-found: create
