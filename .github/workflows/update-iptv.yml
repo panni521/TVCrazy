@@ -1,0 +1,42 @@
+name: 更新IPTV源
+
+# 触发条件：手动触发 + 每天自动运行
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 8 * * *'  # 每天UTC时间8点（北京时间16点）自动运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # 使用Ubuntu环境
+
+    steps:
+      - name: 拉取代码仓库
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'  # 兼容脚本的Python版本
+
+      - name: 安装依赖
+        working-directory: ./mobileunicast
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 运行脚本生成IPTV文件
+        working-directory: ./mobileunicast
+        run: |
+          python unicast.py --top 20  # 可根据需要调整参数
+
+      - name: 提交更新到仓库
+        run: |
+          # 配置Git身份
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 检查是否有文件变化
+          git add ./mobileunicast/output/iptv.m3u ./mobileunicast/output/iptv.txt
+          git commit -m "自动更新IPTV源: $(date +'%Y-%m-%d %H:%M:%S')" || echo "无更新内容"
+          git push
