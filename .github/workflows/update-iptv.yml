@@ -20,15 +20,15 @@ jobs:
           python-version: '3.10'  # 兼容脚本的Python版本
 
       - name: 安装依赖
-        working-directory: ./mobileunicast
+        working-directory: ./mobileunicast  # 依赖文件在mobileunicast目录
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: 运行脚本生成IPTV文件
-        working-directory: ./mobileunicast
         run: |
-          python unicast.py --top 20  # 可根据需要调整参数
+          # 从项目根目录运行脚本，确保输出到根目录/output
+          python mobileunicast/unicast.py --top 20
 
       - name: 提交更新到仓库
         run: |
@@ -36,7 +36,7 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # 检查是否有文件变化
-          git add ./mobileunicast/output/iptv.m3u ./mobileunicast/output/iptv.txt
+          # 检查根目录output文件夹的文件变化（关键修改）
+          git add output/iptv.m3u output/iptv.txt
           git commit -m "自动更新IPTV源: $(date +'%Y-%m-%d %H:%M:%S')" || echo "无更新内容"
           git push
