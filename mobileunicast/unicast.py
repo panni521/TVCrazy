@@ -72,11 +72,11 @@ class UnicastProcessor:
         "https://chinaiptv.pages.dev/Unicast/liaoning/mobile.txt",
         # 第三方优质源
         "https://mycode.zhoujie218.top/me/jsyd.txt",
-        "http://txt.kesug.com/users/alantang.txt",
+        "",
         "http://is.is-great.org/ii/1749383140.txt",
         "https://raw.githubusercontent.com/q1017673817/iptv_zubo/refs/heads/main/hnyd.txt",
         "https://raw.githubusercontent.com/suxuang/myIPTV/refs/heads/main/移动专享.txt",
-        "https://raw.githubusercontent.com/alantang1977/aTV/refs/heads/master/output/result.m3u",
+        "",
         # 补充源
         "https://live.zbds.org/tv/zjyd.txt",
         "https://live.zbds.org/tv/zjyd1.txt",
