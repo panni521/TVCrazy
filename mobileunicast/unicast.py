@@ -8,7 +8,6 @@ IPTV直播源处理工具（重构版）
 4. 按速度排序，保留每个频道前N个最快源
 5. 按频道类型智能分组
 6. 生成标准M3U和TXT格式播放列表（保存到项目根目录/output）
-7. 新增：央视频道中CCTV1至CCTV17按数字从小到大排序
 
 使用说明：
 - 基础用法：python mobileunicast/unicast.py --top 20
@@ -72,11 +71,8 @@ class UnicastProcessor:
         "https://chinaiptv.pages.dev/Unicast/liaoning/mobile.txt",
         # 第三方优质源
         "https://mycode.zhoujie218.top/me/jsyd.txt",
-        "",
-        "http://is.is-great.org/ii/1749383140.txt",
         "https://raw.githubusercontent.com/q1017673817/iptv_zubo/refs/heads/main/hnyd.txt",
-        "https://raw.githubusercontent.com/suxuang/myIPTV/refs/heads/main/移动专享.txt",
-        "",
+        "https://raw.githubusercontent.com/suxuang/myIPTV/refs/heads/main/%E7%A7%BB%E5%8A%A8%E4%B8%93%E4%BA%AB.txt",
         # 补充源
         "https://live.zbds.org/tv/zjyd.txt",
         "https://live.zbds.org/tv/zjyd1.txt",
@@ -174,12 +170,60 @@ class UnicastProcessor:
         # 5. 按频道分组并保留前N个最快源
         grouped_channels = self._group_and_filter_channels(valid_channels)
         
-        # 6. 生成输出文件（已调整到根目录output）
+        # 6. 对央视频道进行专项排序
+        if ChannelGroup.CCTV in grouped_channels:
+            grouped_channels[ChannelGroup.CCTV] = self._sort_cctv_channels(
+                grouped_channels[ChannelGroup.CCTV]
+            )
+        
+        # 7. 生成输出文件（已调整到根目录output）
         self._generate_output_files(grouped_channels)
         print("=== 处理完成 ===")
         print(f"输出文件:")
         print(f"  M3U格式: {self.output_dir / 'iptv.m3u'}")
         print(f"  TXT格式: {self.output_dir / 'iptv.txt'}")
+
+    def _sort_cctv_channels(self, cctv_channels: List[ChannelInfo]) -> List[ChannelInfo]:
+        """
+        对央视频道进行排序：
+        1. CCTV1-CCTV17按数字从小到大排序
+        2. 其他央视相关频道（如CCTV5+、CGTN系列）按名称排序
+        """
+        # 提取唯一频道名称（去重相同频道的不同源）
+        unique_names = list({channel.name for channel in cctv_channels})
+        
+        # 分类处理：基础频道(CCTV1-17)和其他央视频道
+        base_cctv = []  # CCTV1-CCTV17
+        other_cctv = []  # 其他央视相关频道
+        
+        for name in unique_names:
+            # 匹配CCTV1-CCTV17
+            match = re.match(r"^CCTV(\d+)$", name)
+            if match:
+                num = int(match.group(1))
+                if 1 <= num <= 17:
+                    base_cctv.append((num, name))
+                    continue
+            
+            # 其他央视相关频道（含CCTV5+、CGTN等）
+            other_cctv.append(name)
+        
+        # 基础频道按数字排序
+        base_sorted = [name for _, name in sorted(base_cctv, key=lambda x: x[0])]
+        # 其他频道按名称排序
+        other_sorted = sorted(other_cctv)
+        # 合并排序结果
+        sorted_names = base_sorted + other_sorted
+        
+        # 按排序后的名称重新组织频道列表（保留所有源）
+        sorted_channels = []
+        for name in sorted_names:
+            # 收集该频道的所有源并按速度排序
+            channel_sources = [c for c in cctv_channels if c.name == name]
+            sorted_by_speed = sorted(channel_sources, key=lambda x: x.speed, reverse=True)
+            sorted_channels.extend(sorted_by_speed)
+        
+        return sorted_channels
 
     def _download_source_files(self) -> List[Path]:
         """下载所有数据源文件（多线程）"""
@@ -484,19 +528,12 @@ class UnicastProcessor:
         # 每个频道保留前N个最快源
         filtered: List[ChannelInfo] = []
         for name, group in name_groups.items():
-            # 按速度降序排序
-            sorted_group = sorted(group, key=lambda x: x.speed, reverse=True)
-            # 保留前N个
-            kept = sorted_group[:self.top_count]
-            filtered.extend(kept)
-            # 打印处理信息
-            if len(sorted_group) > self.top_count:
-                print(f"  {name}: 从 {len(sorted_group)} 个源中保留前 {self.top_count} 个")
-            else:
-                print(f"  {name}: 保留全部 {len(sorted_group)} 个源")
+            # 按速度降序排序，保留前N个
+            sorted_by_speed = sorted(group, key=lambda x: x.speed, reverse=True)
+            filtered.extend(sorted_by_speed[:self.top_count])
         
         # 按频道类型分组
-        grouped: Dict[str, List[ChannelInfo]] = {
+        type_groups: Dict[str, List[ChannelInfo]] = {
             ChannelGroup.CCTV: [],
             ChannelGroup.WEI_SHI: [],
             ChannelGroup.LOCAL: [],
@@ -506,125 +543,106 @@ class UnicastProcessor:
         }
         
         for channel in filtered:
-            group = self._determine_group(channel.name)
-            grouped[group].append(channel)
+            group = self._determine_channel_group(channel.name)
+            type_groups[group].append(channel)
         
-        return grouped
+        return type_groups
 
-    def _determine_group(self, name: str) -> str:
-        """判断频道所属分组"""
-        # 优先判断央视（包含CCTV和CGTN）
-        if re.match(r"CCTV|CGTN", name, re.IGNORECASE):
+    def _determine_channel_group(self, name: str) -> str:
+        """根据频道名称判断所属分组"""
+        # 优先判断央视（覆盖CCTV和CGTN系列）
+        if re.match(r"^CCTV|CGTN", name, re.IGNORECASE):
             return ChannelGroup.CCTV
         
-        # 判断卫视频道
-        if any(kw in name for kw in self._WEISHI_KEYWORDS):
-            return ChannelGroup.WEI_SHI
+        # 港澳台频道
+        for kw in self._HKMOTW_KEYWORDS:
+            if kw in name:
+                return ChannelGroup.HKMOTW
         
-        # 判断港澳台频道
-        if any(kw in name for kw in self._HKMOTW_KEYWORDS):
-            return ChannelGroup.HKMOTW
+        # 卫视频道
+        for kw in self._WEISHI_KEYWORDS:
+            if kw in name:
+                return ChannelGroup.WEI_SHI
         
-        # 判断省级频道
-        if any(kw in name for kw in self._LOCAL_KEYWORDS) and \
-           not any(kw in name for kw in self._CITY_KEYWORDS):
-            return ChannelGroup.LOCAL
+        # 省级频道
+        for kw in self._LOCAL_KEYWORDS:
+            if kw in name and not any(city in name for city in self._CITY_KEYWORDS):
+                return ChannelGroup.LOCAL
         
-        # 判断市级频道
-        if any(kw in name for kw in self._CITY_KEYWORDS):
-            return ChannelGroup.CITY
+        # 市级频道
+        for kw in self._CITY_KEYWORDS:
+            if kw in name:
+                return ChannelGroup.CITY
         
         # 其他频道
         return ChannelGroup.OTHER
 
-    def _sort_cctv_channels(self, cctv_channels: List[ChannelInfo]) -> List[ChannelInfo]:
-        """对央视频道进行专项排序：CCTV1-CCTV17按数字升序，其他央视频道按名称排序"""
-        # 分离出CCTV1-CCTV17和其他央视频道
-        numbered_cctv = []  # 存储CCTV1-CCTV17
-        other_cctv = []     # 存储其他央视频道（如CCTV5+、CGTN等）
-        
-        for channel in cctv_channels:
-            # 匹配CCTV加数字的格式（仅1-17）
-            match = re.match(r"CCTV(\d+)", channel.name)
-            if match:
-                num = int(match.group(1))
-                if 1 <= num <= 17:
-                    numbered_cctv.append((num, channel))
-                    continue
-            
-            # 其他央视频道
-            other_cctv.append(channel)
-        
-        # 对CCTV1-CCTV17按数字升序排序
-        numbered_cctv_sorted = [channel for (num, channel) in sorted(numbered_cctv, key=lambda x: x[0])]
-        
-        # 其他央视频道按名称排序
-        other_cctv_sorted = sorted(other_cctv, key=lambda x: x.name)
-        
-        # 合并结果（数字频道在前，其他在后）
-        return numbered_cctv_sorted + other_cctv_sorted
-
     def _generate_output_files(self, grouped_channels: Dict[str, List[ChannelInfo]]) -> None:
         """生成M3U和TXT格式的输出文件"""
-        # 处理央视频道排序（新增逻辑）
-        grouped_channels[ChannelGroup.CCTV] = self._sort_cctv_channels(grouped_channels[ChannelGroup.CCTV])
-        
-        # 生成M3U文件
         m3u_path = self.output_dir / "iptv.m3u"
-        with open(m3u_path, "w", encoding="utf-8") as f:
-            f.write("#EXTM3U\n")
-            for group_name in [
-                ChannelGroup.CCTV,
-                ChannelGroup.WEI_SHI,
-                ChannelGroup.LOCAL,
-                ChannelGroup.HKMOTW,
-                ChannelGroup.CITY,
-                ChannelGroup.OTHER
-            ]:
-                channels = grouped_channels[group_name]
-                if not channels:
-                    continue
-                # 按频道名称排序（同一频道的多个源保持速度排序）
-                channels_sorted = sorted(channels, key=lambda x: x.name)
-                for channel in channels_sorted:
-                    f.write(f'#EXTINF:-1 group-title="{group_name}",{channel.name}\n')
-                    f.write(f"{channel.url}\n")
-        print(f"生成M3U文件: {m3u_path}")
-        print(f"M3U文件已生成，包含以下分组:")
-        for group_name, channels in grouped_channels.items():
-            if channels:
-                print(f"  {group_name}: {len(channels)} 个频道源")
-        
-        # 生成TXT文件
         txt_path = self.output_dir / "iptv.txt"
-        with open(txt_path, "w", encoding="utf-8") as f:
-            for group_name in [
-                ChannelGroup.CCTV,
-                ChannelGroup.WEI_SHI,
-                ChannelGroup.LOCAL,
-                ChannelGroup.HKMOTW,
-                ChannelGroup.CITY,
-                ChannelGroup.OTHER
-            ]:
-                channels = grouped_channels[group_name]
-                if not channels:
-                    continue
-                # 写入分组标记
-                f.write(f"{group_name},#genre#\n")
-                # 按频道名称排序
-                channels_sorted = sorted(channels, key=lambda x: x.name)
-                for channel in channels_sorted:
-                    f.write(f"{channel.name},{channel.url}\n")
-        print(f"生成TXT文件: {txt_path}")
+        
+        # 生成M3U文件（带分组信息）
+        try:
+            with open(m3u_path, "w", encoding="utf-8") as f:
+                f.write("#EXTM3U x-tvg-url=\"https://epg.112114.xyz/epg.xml\"\n\n")
+                
+                for group_name in grouped_channels:
+                    channels = grouped_channels[group_name]
+                    if not channels:
+                        continue
+                    
+                    # 写入分组标记
+                    f.write(f"#EXTINF:-1 group-title=\"{group_name}\",{group_name}\n")
+                    f.write(f"#genre#{group_name}\n\n")
+                    
+                    # 写入该分组下的所有频道
+                    for channel in channels:
+                        f.write(f"#EXTINF:-1 tvg-name=\"{channel.name}\" group-title=\"{group_name}\",{channel.name}\n")
+                        f.write(f"{channel.url}\n\n")
+            
+            print(f"✓ M3U文件生成成功: {m3u_path}")
+        except Exception as e:
+            print(f"✗ M3U文件生成失败: {str(e)}")
+        
+        # 生成TXT文件（按分组存储）
+        try:
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(f"# IPTV直播源列表 {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# 总频道数: {sum(len(channels) for channels in grouped_channels.values())}\n\n")
+                
+                for group_name in grouped_channels:
+                    channels = grouped_channels[group_name]
+                    if not channels:
+                        continue
+                    
+                    # 写入分组标题
+                    f.write(f"【{group_name}】({len(channels)})\n")
+                    
+                    # 写入该分组下的所有频道（去重相同名称，保留最快源）
+                    written_names = set()
+                    for channel in channels:
+                        if channel.name not in written_names:
+                            f.write(f"{channel.name},{channel.url} (速度: {channel.speed}MB/s)\n")
+                            written_names.add(channel.name)
+                    
+                    f.write("\n")
+            
+            print(f"✓ TXT文件生成成功: {txt_path}")
+        except Exception as e:
+            print(f"✗ TXT文件生成失败: {str(e)}")
+
+
+def main():
+    """命令行入口"""
+    parser = argparse.ArgumentParser(description="IPTV直播源处理工具")
+    parser.add_argument("--top", type=int, default=20, help="每个频道保留的最大源数量（默认20）")
+    parser.add_argument("--proxy", type=str, default=None, help="下载时使用的代理（格式：http://host:port）")
+    args = parser.parse_args()
+    
+    processor = UnicastProcessor(top_count=args.top, proxy=args.proxy)
+    processor.run()
 
 
 if __name__ == "__main__":
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description="IPTV直播源处理工具")
-    parser.add_argument("--top", type=int, default=20, help="每个频道保留的最大源数量（默认20）")
-    parser.add_argument("--proxy", type=str, help="代理服务器地址（格式：http://host:port）")
-    args = parser.parse_args()
-    
-    # 执行处理流程
-    processor = UnicastProcessor(top_count=args.top, proxy=args.proxy)
-    processor.run()
+    main()
