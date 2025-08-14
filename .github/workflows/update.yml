@@ -1,4 +1,4 @@
-name: 更新IPTV源
+name: 更新UDPXY服务器源
 
 on:
   # 手动触发
