@@ -1,0 +1,48 @@
+name: Daily Update Unicast IPTV
+
+# 触发条件：每天UTC时间0点自动运行
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  update-unicast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd mobileunicast
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unicast.py to update sources
+        run: |
+          cd mobileunicast
+          python unicast.py --output ../output/unicast
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add output/
+          git add mobileunicast/
+          
+          # 检查是否有更改
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          git commit -m "Auto-update unicast sources: $(date +'%Y-%m-%d')"
+          git push
