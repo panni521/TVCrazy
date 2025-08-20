@@ -1,15 +1,25 @@
-name: Daily Update Unicast IPTV
+name: IPTV Unicast Update
 
-# 触发条件：每天UTC时间0点自动运行
 on:
-  schedule:
-    - cron: '0 0 * * *'
-  # 允许手动触发
   workflow_dispatch:
+    inputs:
+      top:
+        description: '每个频道最多保留的最快源数'
+        required: false
+        default: '20'
+      proxy:
+        description: '代理地址（如 http://127.0.0.1:10808，可选）'
+        required: false
+        default: ''
+  schedule:
+    # 每天凌晨3点自动运行
+    - cron: '0 19 * * *'   # UTC时间，北京时间+8小时 = 北京时间3点
 
 jobs:
   update-unicast:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,32 +27,42 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-          cache: 'pip'
+          python-version: 3.11
 
       - name: Install dependencies
         run: |
-          cd mobileunicast
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests
 
-      - name: Run unicast.py to update sources
+      - name: Run unicast.py to generate IPTV files
         run: |
-          cd mobileunicast
-          python unicast.py --output ../output/unicast
-
-      - name: Commit and push changes
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add output/
-          git add mobileunicast/
-          
-          # 检查是否有更改
-          if git diff --quiet; then
-            echo "No changes to commit"
-            exit 0
+          mkdir -p output
+          if [ -z "${{ github.event.inputs.top }}" ]; then
+            TOP_ARG="--top 20"
+          else
+            TOP_ARG="--top ${{ github.event.inputs.top }}"
           fi
-          
-          git commit -m "Auto-update unicast sources: $(date +'%Y-%m-%d')"
-          git push
+
+          if [ -z "${{ github.event.inputs.proxy }}" ]; then
+            PROXY_ARG=""
+          else
+            PROXY_ARG="--proxy ${{ github.event.inputs.proxy }}"
+          fi
+
+          python3 mobileunicast/unicast.py $TOP_ARG $PROXY_ARG
+
+      - name: Commit and Push Generated Files
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "自动更新: 重新生成iptv.m3u和iptv.txt"
+          branch: ${{ github.ref_name }}
+          file_pattern: output/iptv.m3u output/iptv.txt mobileunicast/speed.log mobileunicast/txt.tmp
+          commit_user_name: github-actions[bot]
+          commit_user_email: github-actions[bot]@users.noreply.github.com
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+
+      - name: Show results
+        run: |
+          ls -lh output/
