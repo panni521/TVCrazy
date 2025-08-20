@@ -104,6 +104,7 @@ class UnicastProcessor:
     # 默认URL列表（作为备用）
     DEFAULT_URLS = [
         "https://live.zbds.org/tv/yd.txt",
+        "https://d.kstore.dev/download/15114/TVSolo.txt",
         "https://chinaiptv.pages.dev/Unicast/anhui/mobile.txt"
     ]
     
