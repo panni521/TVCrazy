@@ -394,7 +394,7 @@ class UnicastProcessor:
         tested_channels = []
         
         # 调整并发数，避免资源耗尽
-        max_workers = min(10, len(channels)) if channels else 1
+        max_workers = min(5, len(channels)) if channels else 1
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(self._test_single_channel_speed, channel): channel
