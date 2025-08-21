@@ -3,22 +3,27 @@ import csv
 import requests
 from datetime import datetime
 
-CSV_FILES = [
-    "txiptv.csv",
-    "jsmpeg.csv",
-    "zhgxtv.csv"
-]
+CSV_SOURCES = {
+    "txiptv.csv": "https://raw.githubusercontent.com/alantang1977/TVCrazy/main/txiptv.csv",
+    "jsmpeg.csv": "https://raw.githubusercontent.com/alantang1977/TVCrazy/main/jsmpeg.csv",
+    "zhgxtv.csv": "https://raw.githubusercontent.com/alantang1977/TVCrazy/main/zhgxtv.csv"
+}
 
 HISTORY_DIR = "history"
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
-def fetch_csv(file_path):
-    # You need to fill in your own download logic (e.g., API, scraping, etc.)
-    # For demonstration, just read the local file.
-    with open(file_path, "r", encoding="utf-8") as f:
-        return f.read()
+def fetch_csv(file_name, url):
+    """
+    从网络获取 IPTV CSV 文件内容
+    """
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    return resp.text
 
 def save_history(file_path, content):
+    """
+    变更时自动备份文件到 history/，按时间戳命名
+    """
     basename = os.path.basename(file_path)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     hist_file = os.path.join(HISTORY_DIR, f"{basename}.{timestamp}.bak")
@@ -26,8 +31,11 @@ def save_history(file_path, content):
         f.write(content)
 
 def is_valid_csv(content):
+    """
+    检查CSV文件内容是否有效（有表头且有数据行）
+    """
     try:
-        lines = content.splitlines()
+        lines = [line for line in content.splitlines() if line.strip()]
         reader = csv.reader(lines)
         header = next(reader)
         row = next(reader)
@@ -35,31 +43,34 @@ def is_valid_csv(content):
     except Exception:
         return False
 
-def update_csv(file_path):
-    print(f"Processing: {file_path}")
-    old_content = ""
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            old_content = f.read()
-    # Fetch new content
-    new_content = fetch_csv(file_path)
-    if not is_valid_csv(new_content):
-        print(f"Invalid CSV for {file_path}, skipping update.")
+def update_csv(file_name, url):
+    print(f"检查并同步: {file_name}")
+    local_content = ""
+    if os.path.exists(file_name):
+        with open(file_name, "r", encoding="utf-8") as f:
+            local_content = f.read()
+    # 获取远程内容
+    try:
+        new_content = fetch_csv(file_name, url)
+    except Exception as e:
+        print(f"获取 {file_name} 失败: {e}")
         return
-    if new_content != old_content:
-        print(f"Updating {file_path}, content changed.")
-        save_history(file_path, old_content)
-        with open(file_path, "w", encoding="utf-8") as f:
+    if not is_valid_csv(new_content):
+        print(f"{file_name} 下载内容无效，跳过。")
+        return
+    # 内容有变则备份并写入
+    if new_content != local_content:
+        print(f"{file_name} 内容有变，自动保存历史并更新。")
+        if local_content.strip():
+            save_history(file_name, local_content)
+        with open(file_name, "w", encoding="utf-8") as f:
             f.write(new_content)
     else:
-        print(f"No changes detected for {file_path}.")
+        print(f"{file_name} 无变化。")
 
 def main():
-    for file_path in CSV_FILES:
-        if os.path.exists(file_path):
-            update_csv(file_path)
-        else:
-            print(f"File not found: {file_path}")
+    for file_name, url in CSV_SOURCES.items():
+        update_csv(file_name, url)
 
 if __name__ == "__main__":
     main()
