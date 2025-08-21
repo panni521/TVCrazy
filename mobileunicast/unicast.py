@@ -66,6 +66,7 @@ DATA_SOURCES = [
     "https://chinaiptv.pages.dev/Unicast/guangxi/mobile.txt",
     "https://chinaiptv.pages.dev/Unicast/hebei/mobile.txt",
     "https://chinaiptv.pages.dev/Unicast/heilongjiang/mobile.txt",
+    "http://rihou.cc:555/gggg.nzk",
     "https://chinaiptv.pages.dev/Unicast/henan/mobile.txt",
     "https://chinaiptv.pages.dev/Unicast/hubei/mobile.txt",
     "https://chinaiptv.pages.dev/Unicast/jiangxi/mobile.txt",
